@@ -8,6 +8,8 @@ pnpm dev      # 開発サーバー
 pnpm build    # tsc --noEmit → vite build
 ```
 
+デプロイ: `pnpm build` の後に `wrangler deploy`（Cloudflare Workers の静的アセット配信、設定は `wrangler.jsonc`）。公開 URL: https://prism-pop.nagai-shouten.workers.dev
+
 開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）
 
 ## 視覚・操作・品質のノブ（`src/tuning.ts`）
