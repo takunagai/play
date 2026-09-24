@@ -1,0 +1,216 @@
+# Prism Pop ─ 設計正本（architecture.md）
+
+**このファイルが仕様の正本。実装（委譲含む）はすべてこれに従い、仕様変更は必ずここを先に更新する。**
+
+## 1. コンセプト
+
+- 感情ゴール: 快感・連打。コア操作: 弾く・割る
+- 虹色の膜の泡をタップで割るとベル／マリンバが鳴り、連打・なぞりでコンボが伸びるほど音が駆け上がり和音が積み上がる
+- トーン: 有機的グラデーション。ライム #C6FF00 × バイオレット #7C4DFF、音はアコースティック風、F リディアン
+
+迷ったら「1 タップの手応え（見た目・音・遅延の無さ）」を最優先する。
+
+## 2. モジュール構成
+
+```
+web/
+  index.html / src/style.css      レイヤー: #bg(2D) / #gl(WebGL) / p5 canvas / #glow / UI
+  src/
+    main.ts        入力・ゲーム状態・コンボ・描画ループ（p5 インスタンスモード）・品質切替の配線
+    tuning.ts      視覚・操作・品質の定数（一元管理）
+    music.ts       スケール・音程決定・度数→色（音と視覚の共通定義）   ← メインが作成
+    bubbles.ts     泡のシミュレーション（描画非依存の純粋な状態）
+    effects.ts     しぶき粒子・リング・波紋・ミス波紋（p5 canvas に描く）
+    field.ts       背景の色ブロブの時間関数（2D と GL で同じ背景を出すための共通定義）
+    quality.ts     適応型画質（standard / rich）の判定ロジック（純粋関数 + 小さな状態）
+    render/
+      background2d.ts  standard の背景（低解像度 2D canvas、CSS で拡大）
+      bubbles2d.ts     standard の泡（事前レンダリングしたスプライト）
+      rich-gl.ts       rich の背景 + 泡（WebGL2 全画面フラグメントシェーダ）
+    audio/
+      engine.ts        AudioEngine 契約 + Noop + ファクトリ        ← メインが作成
+      audio-tuning.ts  音響の定数（一元管理）
+      prism-engine.ts  Web Audio 実装
+```
+
+- main.ts は `AudioEngine` 契約越しにしか音に触らない。Web Audio を直接触らない
+- 音程は main.ts が `music.ts` の `noteForPop()` で決めて `pop()` に渡す（音と色が同じ度数から決まる）
+- 契約の正本は本ファイル 5 節。実装側の定数には「正本は docs/architecture.md」とコメントを置く
+
+## 3. 状態
+
+入力の発生源（main.ts）が状態の正本。音響は受けたイベントに反応するだけ。
+
+### 3.1 全体
+
+```
+gate（導入オーバーレイ「触れて、はじけさせて」）
+  └ 最初の pointerdown → audio.start()（resume を待たない）→ play
+      （その pointerdown が泡に当たっていれば、そのまま 1 個目を割る）
+play
+```
+
+### 3.2 泡（1 個ごと）
+
+```
+rising（下から湧いて揺れながら昇る）
+  ├ 画面上端を抜ける → 消滅（再スポーン枠に戻る）
+  └ ヒット → popping（POP_ANIM_MS=140ms: 膜が一瞬膨らみ→破れて消える）→ 消滅
+```
+
+- 同時存在数: 画面面積から算出（`BUBBLE_DENSITY`、目安: スマホ縦 14〜18 / PC 22〜30）。上限 `MAX_BUBBLES = 40`（GL の uniform 配列長と一致させる）
+- サイズ: 半径 = 画面短辺 × [0.035, 0.11]。小さい泡ほど多い分布
+- 大きい泡（size > 0.7）を割ると小泡 2〜3 個に分裂（`SPLIT_*`）。小泡は割った場所から弾けて散る
+- 割れた泡の周囲の泡は衝撃で押し出される（`POP_PUSH_*`）
+
+### 3.3 コンボ
+
+```
+combo = 0
+pop 発生: 前回の pop から COMBO_WINDOW_MS（900ms）以内なら combo+1、でなければ combo=1
+COMBO_WINDOW_MS 経過で pop が無い → comboEnd(combo)（combo≥3 のときだけ余韻の和音）→ combo=0
+combo が MILESTONE_EVERY（8）の倍数に達した瞬間 → プリズムバースト
+energy（0..1）: pop ごとに +ENERGY_PER_POP、毎秒 ENERGY_DECAY で減衰。背景の明るさ・色相と音のパッドに使う
+```
+
+### 3.4 プリズムバースト（連打のご褒美）
+
+- 最後に割った泡の位置から虹色の輪が広がる（600ms、半径は画面対角線の 0.5 まで）
+- 輪が通過した泡を、通過順に 45ms 間隔で連鎖的に割る（kind=`chain`。コンボも加算する）
+- 画面に軽い揺れ（`SHAKE_MILESTONE`）、背景のフラッシュ
+
+### 3.5 入力
+
+- Pointer Events でマウス・タッチ統一。`pointerId` ごとに追跡し、マルチタッチで同時に割れる
+- `pointerdown`: その位置の泡を割る。当たらなければ `miss`（小さな波紋 + 周囲の泡を軽く押す）
+- ボタンを押したまま / 指を置いたまま動かす: 通過した泡を割る（kind=`swipe`。前フレーム位置との線分で当たり判定）
+- 当たり判定は見た目より甘く: 半径 + `HIT_SLOP_PX`（マウス 6px / タッチ 14px）
+- `touch-action: none`、コンテキストメニュー抑止。スクロール・ピンチでページが動かないこと
+- デスクトップのホバー: カーソル下の泡の膜がわずかに明るくなる（触る前の誘い）
+
+## 4. 音視覚マッピング表
+
+| イベント | 引数 | 視覚反応 | 音響反応 |
+|---|---|---|---|
+| pop（tap） | x,y,midi,size,combo,degree | 膜が破れる + しぶき粒子（数 ∝ size）+ 度数色のリング + 小フラッシュ | 破裂音（ノイズの短い成分）+ 音程（低域=マリンバ／高域=ベル）、pan ∝ x、音量 ∝ 0.6+0.4·size |
+| pop（swipe） | 同上 | 同上（しぶき少なめ） | 同上、音量 ×0.8、弾いた感じの明るめの音色 |
+| pop（chain） | 同上 | 同上 + 輪の色を虹色に | 同上、ベル寄りの音色、音量 ×0.7 |
+| miss | x,y | 小さな淡い波紋、周囲の泡を押す | ミュートしたマリンバの小さなコツ音（音程なし寄り） |
+| comboMilestone | level(=combo/8),x,y | プリズムバースト（3.4）+ 揺れ + 背景フラッシュ | ベルのグリッサンド和音（F リディアンの 1-3-5-#4-7 を上昇）、level で音域と長さを伸ばす |
+| comboEnd | combo | 背景がゆっくり元の色へ戻る | combo≥3: 主和音の柔らかい余韻（パッド + 高いベル 1 音） |
+| setEnergy | energy 0..1（毎フレーム） | 背景ブロブの明るさ・色相（バイオレット→明るい紫＋ライムの光）が追従 | パッド（主音 + 5 度）の音量・フィルタが追従。energy 0 で無音 |
+| （毎フレーム 1 回） | getAmp() 0..1 | グロー層の明るさ脈動、泡の膜のきらめき量 | ─（音→視覚の逆流線はこの 1 本のみ） |
+
+## 5. AudioEngine 契約（`web/src/audio/engine.ts` が正本の写し）
+
+```ts
+export type PopKind = "tap" | "swipe" | "chain";
+
+export interface PopEvent {
+  x: number;      // 0..1（画面幅で正規化）
+  y: number;      // 0..1
+  midi: number;   // music.ts の noteForPop() が決める
+  size: number;   // 0..1（泡の半径をサイズ範囲で正規化）
+  combo: number;  // この pop を含む現在のコンボ数（1 始まり）
+  kind: PopKind;
+}
+
+export interface AudioEngine {
+  /** ユーザー操作のハンドラ内で呼ぶ。resume() の解決を待たずに配線まで済ませる。常駐の解錠リスナーを置く */
+  start(): Promise<void>;
+  /** 配線と素材の準備が済んでいるか。false の間、他メソッドは何もしない */
+  readonly isReady: boolean;
+  pop(event: PopEvent): void;
+  miss(x: number, y: number): void;
+  comboMilestone(level: number, x: number, y: number): void;
+  comboEnd(combo: number): void;
+  setEnergy(energy: number): void; // 毎フレーム呼ばれてよい（内部で平滑化）
+  getAmp(): number;                 // マスター振幅 0..1。1 フレーム 1 回だけ呼ぶ
+  getDiagnostics(): Record<string, string | number | boolean>; // ?debug 表示用
+}
+```
+
+- `?mute` で `NoopAudioEngine`（視覚のみのスモークテスト用）
+
+## 6. 音響設計
+
+音階: F リディアン（F G A B C D E ─ すべて白鍵）。`music.ts` が正本。
+
+| 名前 | 方式 | パラメータ写像 |
+|---|---|---|
+| marimba | モーダル合成: サイン部分音 比 1 / 3.93 / 9.54、減衰 0.9s / 0.25s / 0.08s + マレットのクリック（帯域ノイズ 3ms） | midi ≤ 72 で主役。size 大 → 低域・減衰長め |
+| bell | 加算合成: 非整数倍音 比 1 / 2.76 / 5.40 / 8.93、減衰 2.5s〜0.3s、ごく軽いビブラート | midi ≥ 79 で主役。72〜79 は marimba とクロスフェード |
+| popClick | ホワイトノイズ 10〜25ms → バンドパス（中心 2〜5kHz、size 大ほど低く）+ 上昇サイン「プッ」20ms | 全 pop に重ねる。泡が割れる感触の要 |
+| missTick | marimba を強くミュート（減衰 60ms）、LPF 1.2kHz | 音量小 |
+| milestoneGliss | bell を 35ms 間隔で 1-3-5-#4-7-1' と上昇、level で 1〜2 オクターブ | pan を左右に広げる |
+| pad | 主音 + 5 度 + 9th のサイン/三角のデチューン、LPF | energy → 音量 0..0.12・LPF 400..2.4kHz。comboEnd で 1 回膨らむ |
+
+- マスター: 全音源 → `fxIn` → dry / wet（生成 IR の Convolver、2.8s、明るめ）→ DynamicsCompressor（リミッタ代用）→ Analyser → destination
+- 同時発音上限 `MAX_VOICES = 28`。超えたら最も古い声を 30ms でフェードして奪う
+- 連打で音量が積み上がりすぎないよう、直近 250ms の pop 数でゲインを緩やかに下げる（`DENSITY_DUCK`）
+- 小型スピーカー対策: 最低音は F3（174Hz）付近まで。低音に頼らず、クリックと中高域で手応えを出す
+- 素材の事前計算（IR 生成など）は `setTimeout(0)` で小分けにし、タップ直後に長いタスクを作らない
+
+### 音程決定（music.ts）
+
+- サイズでレジスタ: size 1（大）→ F3 付近、size 0（小）→ F6 付近
+- コンボで度数が駆け上がる: combo≥2 から、和声音セット {1, 3, 5, #4(=B), 7(=E)} を combo に応じて上昇（1 周するとオクターブ上へ、上限 C7）
+- combo=1（単発）はサイズで決まるレジスタ内の和声音から最寄りを選ぶ
+- `degree`（0..4 の和声音インデックス）→ 色（`colorForDegree`）。視覚と音で同じ度数を使う
+
+## 7. ビジュアル設計
+
+### 7.1 レイヤー（下から）
+
+1. `#bg` 2D canvas（standard のみ表示）: 低解像度（CSS px の 1/4）で描いて CSS で拡大
+2. `#gl` WebGL2 canvas（rich のみ表示）: 背景 + 泡を 1 枚のシェーダで描く
+3. p5 canvas（常時、透明背景）: しぶき・リング・波紋・UI 的演出。standard では泡もここに描く
+4. `#glow` 縮小 canvas（1/4）: 明るい要素の発光。`mix-blend-mode: screen`。本体キャンバスに加算しない（白飽和の帰還ループになる）
+
+### 7.2 パレット
+
+- 原色: ライム `#C6FF00` / バイオレット `#7C4DFF`。**原色は泡の縁・しぶき・リングなど明るい要素にだけ使う**
+- 背景ブロブ: 深いインディゴ `#1B1446`、バイオレット `#3B2380`、ティール `#0E5A56`、深いマゼンタ `#4A1B5E`。ベース `#0D0A1F`
+- **暗い背景・低 alpha で色相 15〜125°（橙〜黄緑）を使わない**。ライムは暗く重ねると泥色になる。energy による色ずらしの後も、最終色相がこの帯に入ったら帯の外へ逃がす（`avoidMuddyHue`）
+- 度数色（和声音 5 つ）: 1=ライム #C6FF00 / 3=シアン寄りの緑 #3DFFB8 / 5=スカイ #5CC8FF / #4=バイオレット #7C4DFF / 7=ピンク #FF5CE1
+
+### 7.3 泡の見た目
+
+- 共通: ほぼ透明な本体、縁の明るいリム、薄膜干渉の虹色（膜の厚みがゆっくり揺らぐ）、左上のハイライト 1 点、ふわふわした形の揺れ（半径を ±3% で楕円変形）
+- standard: 半径ごとに量子化（8 段）した事前レンダリングのスプライト（放射グラデーション + 虹色のリム）を `drawImage`。虹色の揺らぎは色相の異なる 2 枚のスプライトの alpha クロスフェードで出す
+- rich: フラグメントシェーダで描く ─ 薄膜干渉（厚み = ノイズ × 角度で RGB の位相をずらす）、フレネルのリム、背景の屈折（背景は `field.ts` と同じ式をシェーダ内で評価するので、テクスチャ不要）、割れる瞬間の膜の破れ（popT で縁から穴が広がる）
+- 割れた瞬間: 膜の破片に見えるしぶき粒子（度数色 + 虹色）、リング 1 本、0.12s の小フラッシュ
+
+### 7.4 性能
+
+- 目標 60fps。p5: `p.disableFriendlyErrors = true`（FES の偽陽性が fps を殺す）、`pixelDensity(1)` を `createCanvas` の**後**に呼ぶ（`canvas.width` の実測で確認）
+- しぶき粒子の上限: standard 1200 / rich 4000。大量粒子は p5 の `stroke()` を経由せず 2D context に直接描き、`ctx.save()/restore()` で囲む（p5 v2 は fill/stroke をキャッシュする）
+- `getAmp()` は 1 フレーム 1 回に巻き上げる。色は事前計算した表から引く
+- `window.__prismDebug()` で fps・draw 平均 ms・画質段・粒子数・泡数を返す（p5 は rAF の参照を起動時に握るので、draw 内で計測する）
+
+## 8. 適応型画質（Tier 設計）
+
+- **Tier 1 = standard**: 2D のみ。これ単独で作品として成立すること（スマホの基準）
+- **Tier 2 = rich**: WebGL2 シェーダ。WebGL2 が無い・コンパイル失敗・コンテキスト喪失でも Tier 1 が動き続けること（try-catch とフォールバック）
+
+### 判定（quality.ts）
+
+1. 起動は必ず standard
+2. `?quality=standard|rich` があれば固定（自動判定しない）
+3. 昇格の前提: WebGL2 が作れる、`navigator.hardwareConcurrency ≥ 4`（未定義なら可）
+4. ページ表示から 3 秒間（導入画面の間も泡は動いている）の standard でのフレーム間隔の中央値を「基準間隔」として記録（ディスプレイの実リフレッシュ、または省エネモードの 30Hz 制限もここに含まれる）
+5. rich を 2.5 秒試行し、フレーム間隔の中央値 ≤ 基準 × 1.12、かつ 50ms 超のフレームが試行中の 3% 未満なら rich を維持。満たさなければ standard に戻し、このセッションでは再試行しない
+6. rich 運用中は直近 2 秒で監視し、中央値 > 基準 × 1.35 が 2 窓連続なら standard へ降格
+7. **30Hz で均一（変動係数が小さい）は省エネモードの rAF 制限であって負荷ではない**。基準間隔との比で判定するのはこのため。絶対値の fps で判定しない
+8. 判定結果は `localStorage`（キー `prism-pop:quality`）に端末の便宜として保存し、次回は試行を省く。読み書きは try-catch で囲み、失敗しても動く
+9. 切り替えはフレーム境界で行い、泡の状態（bubbles.ts）は画質段に依存しないので途切れない
+
+standard 内でもしぶき粒子の上限を fps で自動調整する（1200 → 800 → 500）。
+
+## 9. ディレクトリ・定数
+
+- 視覚・操作・品質の定数: `web/src/tuning.ts` の冒頭に集約
+- 音響の定数: `web/src/audio/audio-tuning.ts` に集約
+- 音階・和声音・度数色: `web/src/music.ts`
+- README にノブ一覧表（定数名・意味・既定値・体感への効き方）を置く
+- 開発用クエリ: `?mute`（無音）、`?quality=standard|rich`（画質固定）、`?debug`（画面に診断: fps・画質段・音声状態・`isSecureContext`・直近のエラー）

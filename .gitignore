@@ -1,0 +1,7 @@
+# macOS
+.DS_Store
+
+# Claude Code のローカル設定（スキルは絶対パスのシンボリックリンクで、他環境では解決できない）
+.claude/
+
+# 依存とビルド成果物は web/.gitignore で除外している
