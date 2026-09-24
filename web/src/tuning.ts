@@ -123,6 +123,8 @@ export const LOW_RES_DIVISOR = 4;
 export const CREATURE_OPACITY = 0.25;
 /** 大きさの基準長 = min(画面幅, 画面高さ × この比)。16:9 基準で調整した比率を縦長・超横長でも破綻させない */
 export const CREATURE_BASE_ASPECT = 16 / 9;
+/** 縦長画面（スマホ縦持ち）では基準長が画面幅になり小さく見えるので、この倍率を掛ける */
+export const CREATURE_PORTRAIT_SCALE = 2;
 /** 昇る種類の速さ（画面高さ比 / 秒）。画面を抜けるまで 40〜70 秒 */
 export const CREATURE_RISE_SPEED_MIN = 0.014;
 export const CREATURE_RISE_SPEED_MAX = 0.024;

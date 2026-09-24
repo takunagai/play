@@ -6,6 +6,7 @@
 
 import {
   CREATURE_BASE_ASPECT,
+  CREATURE_PORTRAIT_SCALE,
   CREATURE_GLIDE_SPEED_MAX,
   CREATURE_GLIDE_SPEED_MIN,
   CREATURE_RISE_SPEED_MAX,
@@ -78,7 +79,8 @@ function randomRange(min: number, max: number): number {
 }
 
 export function creatureBaseLength(width: number, height: number): number {
-  return Math.min(width, height * CREATURE_BASE_ASPECT);
+  const baseLength = Math.min(width, height * CREATURE_BASE_ASPECT);
+  return width < height ? baseLength * CREATURE_PORTRAIT_SCALE : baseLength;
 }
 
 /** 画面外の余白（画面比）。画像の半辺ぶん外に出てから再登場させる */
