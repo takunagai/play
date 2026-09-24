@@ -71,6 +71,17 @@ pnpm build    # tsc --noEmit → vite build
 | `SPLASH_PARTICLE_LIFE_MS_MIN` / `_MAX` | 260 / 520 | しぶき 1 粒の寿命範囲 |
 | `RING_LIFE_MS` / `RIPPLE_LIFE_MS` / `MISS_RIPPLE_LIFE_MS` | 420 / 520 / 380 | リング・波紋・ミス波紋それぞれの寿命 |
 
+### 浮遊生物（`creatures.ts`）
+
+種類ごとの大きさ比率・脈動・傾きは `creatures.ts` の `CREATURE_SPECS`（一覧は `docs/architecture.md` 7.5 節）。
+
+| 定数 | 既定値 | 効き方 |
+|---|---|---|
+| `CREATURE_OPACITY` | 0.25 | 全種共通の不透明度。上げると存在感が増すが泡の視認性が落ちる |
+| `CREATURE_BASE_ASPECT` | 16/9 | 大きさの基準長 = min(画面幅, 画面高さ × この比)。超横長画面で巨大化しないための頭打ち |
+| `CREATURE_RISE_SPEED_MIN` / `_MAX` | 0.014 / 0.024（画面高さ比/秒） | 昇る種類（クラゲ・クリオネ・クシクラゲ）の速さ。グラスオクトパスはこの 0.7 倍で斜めに漂う |
+| `CREATURE_GLIDE_SPEED_MIN` / `_MAX` | 0.018 / 0.03（画面幅比/秒） | 横に進む種類（エイ・リーフィーシードラゴン）の速さ |
+
 ### 適応型画質（`quality.ts`）
 
 | 定数 | 既定値 | 効き方 |

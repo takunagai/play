@@ -1,14 +1,16 @@
 // ============================================================
 // render/rich-gl.ts ─ rich の背景 + 泡（WebGL2 全画面フラグメントシェーダ）
 // 薄膜干渉・フレネルのリム・背景の屈折（field.ts と同じブロブ和をシェーダ内で評価）・
-// 割れる瞬間の膜の破れを 1 パスで描く。テクスチャは使わない。
+// 割れる瞬間の膜の破れを 1 パスで描く。テクスチャは浮遊生物のアトラス 1 枚だけ（7.5 節）。
 // WebGL2 が無い・コンパイル失敗・コンテキスト喪失時は isAvailable=false になるので、
 // main.ts はそれを見て standard へフォールバックする。正本は docs/architecture.md 7.3 節。
 // ============================================================
 
 import type { Bubble } from "../bubbles";
+import { CREATURE_SPECS } from "../creatures";
+import type { CreaturePose } from "../creatures";
 import type { BackgroundBlob } from "../field";
-import { MAX_BUBBLES, PALETTE_BASE } from "../tuning";
+import { CREATURE_OPACITY, MAX_BUBBLES, PALETTE_BASE } from "../tuning";
 
 const VERTEX_SOURCE = `#version 300 es
 void main() {
@@ -18,12 +20,19 @@ void main() {
 `;
 
 const BLOB_COUNT = 4;
+const CREATURE_COUNT = CREATURE_SPECS.length;
+/** 浮遊生物アトラスの列数（行数は CREATURE_COUNT から決まる） */
+const ATLAS_COLUMNS = 3;
+const ATLAS_ROWS = Math.ceil(CREATURE_COUNT / ATLAS_COLUMNS);
 
 const FRAGMENT_SOURCE = `#version 300 es
 precision highp float;
 
 #define BUBBLE_COUNT ${MAX_BUBBLES}
 #define BLOB_COUNT ${BLOB_COUNT}
+#define CREATURE_COUNT ${CREATURE_COUNT}
+#define ATLAS_COLUMNS ${ATLAS_COLUMNS}
+#define ATLAS_ROWS ${ATLAS_ROWS}
 
 uniform vec2 uResolution;
 uniform float uTime;
@@ -38,6 +47,13 @@ uniform vec2 uBubblePos[BUBBLE_COUNT];
 uniform float uBubbleRadius[BUBBLE_COUNT];
 uniform float uBubblePopT[BUBBLE_COUNT];
 uniform float uBubbleSeed[BUBBLE_COUNT];
+
+// 浮遊生物: xy = 中心、zw = 半辺（z が負なら左右反転）。いずれも描画 px
+uniform vec4 uCreatureXform[CREATURE_COUNT];
+uniform float uCreatureRotation[CREATURE_COUNT];
+uniform float uCreatureOpacity; // 0 のときはアトラス未読み込み（描かない）
+uniform float uAtlasCellPx;
+uniform sampler2D uCreatureAtlas; // プリマルチプライド α
 
 out vec4 outColor;
 
@@ -54,6 +70,31 @@ vec3 evalBackground(vec2 p) {
     color += uBlobColor[i] * a * 0.8;
   }
   return clamp(color, 0.0, 1.0);
+}
+
+// 背景の上に浮遊生物を重ねる。ループ内の分岐で暗黙の微分が使えないので、LOD は画面上の大きさから求める
+vec3 addCreatures(vec3 color, vec2 p) {
+  if (uCreatureOpacity <= 0.0) return color;
+  for (int i = 0; i < CREATURE_COUNT; i++) {
+    vec4 xform = uCreatureXform[i];
+    vec2 d = p - xform.xy;
+    float extent = max(abs(xform.z), abs(xform.w)) * 1.42;
+    if (abs(d.x) > extent || abs(d.y) > extent) continue;
+    float c = cos(uCreatureRotation[i]);
+    float s = sin(uCreatureRotation[i]);
+    vec2 q = vec2(c * d.x + s * d.y, -s * d.x + c * d.y) / xform.zw;
+    if (abs(q.x) > 1.0 || abs(q.y) > 1.0) continue;
+    vec2 cell = vec2(float(i % ATLAS_COLUMNS), float(i / ATLAS_COLUMNS));
+    vec2 uv = (cell + q * 0.5 + 0.5) / vec2(float(ATLAS_COLUMNS), float(ATLAS_ROWS));
+    float lod = max(0.0, log2(uAtlasCellPx / (2.0 * abs(xform.w))));
+    vec4 texel = textureLod(uCreatureAtlas, uv, lod);
+    color = color * (1.0 - texel.a * uCreatureOpacity) + texel.rgb * uCreatureOpacity;
+  }
+  return color;
+}
+
+vec3 evalScene(vec2 p) {
+  return addCreatures(evalBackground(p), p);
 }
 
 // 膜の厚み（nm）。泡の局所座標 u（-1..1）の滑らかな関数。角度（atan）を使わないので継ぎ目が出ない
@@ -75,7 +116,7 @@ vec3 interferenceColor(float thicknessNm, float cosT) {
 
 void main() {
   vec2 fragPixel = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
-  vec3 color = evalBackground(fragPixel);
+  vec3 color = evalScene(fragPixel);
 
   for (int i = 0; i < BUBBLE_COUNT; i++) {
     float baseRadius = uBubbleRadius[i];
@@ -107,7 +148,7 @@ void main() {
 
     // 屈折: 薄い膜なので縁の近くだけわずかに歪む
     vec2 normal2d = dist > 0.001 ? delta / dist : vec2(0.0);
-    vec3 refracted = evalBackground(fragPixel - normal2d * radius * 0.06 * r * r);
+    vec3 refracted = evalScene(fragPixel - normal2d * radius * 0.06 * r * r);
 
     float reflectance = fresnel * 1.5 + 0.05 + uAmp * 0.08;
     vec3 bubbleColor = refracted * (1.0 - min(0.8, fresnel)) + film * environment * reflectance;
@@ -163,10 +204,17 @@ interface Uniforms {
   bubbleRadius: WebGLUniformLocation | null;
   bubblePopT: WebGLUniformLocation | null;
   bubbleSeed: WebGLUniformLocation | null;
+  creatureXform: WebGLUniformLocation | null;
+  creatureRotation: WebGLUniformLocation | null;
+  creatureOpacity: WebGLUniformLocation | null;
+  atlasCellPx: WebGLUniformLocation | null;
+  creatureAtlas: WebGLUniformLocation | null;
 }
 
 export interface RichRenderParams {
   bubbles: readonly Bubble[];
+  /** 浮遊生物の姿勢（CSS px）。アトラス未設定のときは無視される */
+  creaturePoses: readonly CreaturePose[];
   blobs: readonly BackgroundBlob[];
   timeSec: number;
   amp: number;
@@ -189,6 +237,9 @@ export class RichGLRenderer {
   private readonly blobPosBuf = new Float32Array(BLOB_COUNT * 2);
   private readonly blobRadiusBuf = new Float32Array(BLOB_COUNT);
   private readonly blobColorBuf = new Float32Array(BLOB_COUNT * 3);
+  private readonly creatureXformBuf = new Float32Array(CREATURE_COUNT * 4);
+  private readonly creatureRotationBuf = new Float32Array(CREATURE_COUNT);
+  private hasCreatureAtlas = false;
 
   private readonly onContextLost = (event: Event): void => {
     event.preventDefault();
@@ -245,7 +296,14 @@ export class RichGLRenderer {
         bubbleRadius: gl.getUniformLocation(program, "uBubbleRadius"),
         bubblePopT: gl.getUniformLocation(program, "uBubblePopT"),
         bubbleSeed: gl.getUniformLocation(program, "uBubbleSeed"),
+        creatureXform: gl.getUniformLocation(program, "uCreatureXform"),
+        creatureRotation: gl.getUniformLocation(program, "uCreatureRotation"),
+        creatureOpacity: gl.getUniformLocation(program, "uCreatureOpacity"),
+        atlasCellPx: gl.getUniformLocation(program, "uAtlasCellPx"),
+        creatureAtlas: gl.getUniformLocation(program, "uCreatureAtlas"),
       };
+      gl.uniform1i(this.uniforms.creatureAtlas, 0);
+      gl.uniform1f(this.uniforms.creatureOpacity, 0);
 
       const [br, bg, bb] = hexToRgb01(PALETTE_BASE);
       gl.uniform3f(this.uniforms.baseColor, br, bg, bb);
@@ -264,6 +322,42 @@ export class RichGLRenderer {
 
   get hasContextLoss(): boolean {
     return this.contextLost;
+  }
+
+  get hasCreatures(): boolean {
+    return this.hasCreatureAtlas;
+  }
+
+  /** 浮遊生物の画像を 1 枚のアトラスにまとめてテクスチャ化する（画像は全て同じ正方形サイズの前提） */
+  setCreatureImages(images: readonly HTMLImageElement[]): void {
+    const gl = this.gl;
+    const uniforms = this.uniforms;
+    if (!gl || !uniforms || this.hasCreatureAtlas || images.length !== CREATURE_COUNT) return;
+
+    const cellPx = images[0].naturalWidth;
+    const atlas = document.createElement("canvas");
+    atlas.width = cellPx * ATLAS_COLUMNS;
+    atlas.height = cellPx * ATLAS_ROWS;
+    const ctx = atlas.getContext("2d");
+    if (!ctx) return;
+    images.forEach((image, i) => {
+      ctx.drawImage(image, (i % ATLAS_COLUMNS) * cellPx, Math.floor(i / ATLAS_COLUMNS) * cellPx, cellPx, cellPx);
+    });
+
+    const texture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    gl.uniform1f(uniforms.atlasCellPx, cellPx);
+    gl.uniform1f(uniforms.creatureOpacity, CREATURE_OPACITY);
+    this.hasCreatureAtlas = true;
   }
 
   resize(cssWidth: number, cssHeight: number, renderScale: number): void {
@@ -303,6 +397,19 @@ export class RichGLRenderer {
       this.bubbleRadiusBuf[i] = isVisible ? bubble.radius * scale : 0;
       this.bubblePopTBuf[i] = bubble.state === "popping" ? bubble.popT : 0;
       this.bubbleSeedBuf[i] = bubble.shimmerSeed;
+    }
+
+    if (this.hasCreatureAtlas) {
+      for (const pose of params.creaturePoses) {
+        const i = pose.index;
+        this.creatureXformBuf[i * 4] = pose.centerX * scale;
+        this.creatureXformBuf[i * 4 + 1] = pose.centerY * scale;
+        this.creatureXformBuf[i * 4 + 2] = pose.halfWidth * scale;
+        this.creatureXformBuf[i * 4 + 3] = pose.halfHeight * scale;
+        this.creatureRotationBuf[i] = pose.rotation;
+      }
+      gl.uniform4fv(uniforms.creatureXform, this.creatureXformBuf);
+      gl.uniform1fv(uniforms.creatureRotation, this.creatureRotationBuf);
     }
 
     gl.viewport(0, 0, pixelWidth, pixelHeight);

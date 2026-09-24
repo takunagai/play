@@ -30,11 +30,13 @@ import {
   spawnSplash,
   updateEffects,
 } from "./effects";
+import { createCreatureField, loadCreatureImages, updateCreatures } from "./creatures";
 import { backgroundBlobs } from "./field";
 import { QualityController } from "./quality";
 import type { QualityTier } from "./quality";
 import { drawBackground2D } from "./render/background2d";
 import { buildBubbleSpriteAtlas, drawBubble2D } from "./render/bubbles2d";
+import { drawCreatures2D } from "./render/creatures2d";
 import { RichGLRenderer } from "./render/rich-gl";
 import {
   COMBO_WINDOW_MS,
@@ -62,6 +64,7 @@ P5.disableFriendlyErrors = true;
 // ---- DOM ----
 const stageEl = document.querySelector<HTMLDivElement>("#stage")!;
 const bgCanvas = document.querySelector<HTMLCanvasElement>("#bg")!;
+const creaturesCanvas = document.querySelector<HTMLCanvasElement>("#creatures")!;
 const glCanvas = document.querySelector<HTMLCanvasElement>("#gl")!;
 const p5HostEl = document.querySelector<HTMLDivElement>("#p5-host")!;
 const glowCanvas = document.querySelector<HTMLCanvasElement>("#glow")!;
@@ -87,6 +90,13 @@ const effectsState = createEffectsState(SPLASH_CAP_RICH);
 let spriteAtlas = buildBubbleSpriteAtlas(Math.min(width, height));
 let spriteRebuildTimer = 0;
 const SPRITE_REBUILD_DEBOUNCE_MS = 150;
+const creatureField = createCreatureField();
+/** 浮遊生物の画像。読み込み完了までは null（その間は描かない） */
+let creatureImages: HTMLImageElement[] | null = null;
+void loadCreatureImages().then((images) => {
+  creatureImages = images;
+});
+let creaturesCtx: CanvasRenderingContext2D | null = null;
 let richRenderer: RichGLRenderer | null = null;
 let glowCtx: CanvasRenderingContext2D | null = null;
 
@@ -206,16 +216,18 @@ if (import.meta.env.DEV) {
         .map((bubble) => ({ x: bubble.x, y: bubble.y, radius: bubble.radius }));
 }
 
-// ---- 低解像度レイヤーのサイズ ----
-function resizeLowResCanvases(): void {
+// ---- 2D レイヤーのサイズ（#bg / #glow は低解像度、#creatures は CSS px 等倍） ----
+function resizeLayerCanvases(): void {
   const lowWidth = Math.max(1, Math.ceil(width / LOW_RES_DIVISOR));
   const lowHeight = Math.max(1, Math.ceil(height / LOW_RES_DIVISOR));
   bgCanvas.width = lowWidth;
   bgCanvas.height = lowHeight;
   glowCanvas.width = lowWidth;
   glowCanvas.height = lowHeight;
+  creaturesCanvas.width = width;
+  creaturesCanvas.height = height;
 }
-resizeLowResCanvases();
+resizeLayerCanvases();
 
 function handleResize(p: P5): void {
   width = window.innerWidth;
@@ -223,7 +235,7 @@ function handleResize(p: P5): void {
   devicePixelRatioClamped = Math.min(window.devicePixelRatio || 1, GL_MAX_DEVICE_PIXEL_RATIO);
   p.resizeCanvas(width, height);
   p.pixelDensity(1);
-  resizeLowResCanvases();
+  resizeLayerCanvases();
   // スプライトの焼き直しは画素単位で数十 ms かかるので、リサイズが落ち着いてから 1 回だけ行う
   window.clearTimeout(spriteRebuildTimer);
   spriteRebuildTimer = window.setTimeout(() => {
@@ -481,6 +493,8 @@ new P5((p: P5) => {
 
     const richActive = tier === "rich" && richRenderer !== null && richRenderer.isAvailable && !richRenderer.hasContextLoss;
     glCanvas.style.display = richActive ? "block" : "none";
+    creaturesCanvas.style.display = richActive ? "none" : "block";
+    if (richActive && richRenderer && creatureImages && !richRenderer.hasCreatures) richRenderer.setCreatureImages(creatureImages);
 
     energy = Math.max(0, energy - ENERGY_DECAY_PER_S * (dtMs / 1000));
     audio.setEnergy(energy);
@@ -502,10 +516,12 @@ new P5((p: P5) => {
 
     const timeSec = nowMs / 1000;
     const blobs = backgroundBlobs(timeSec, energy);
+    updateCreatures(creatureField, dtMs, timeSec, width, height);
 
     if (richActive && richRenderer) {
       richRenderer.render({
         bubbles: bubbleField.bubbles,
+        creaturePoses: creatureField.poses,
         blobs,
         timeSec,
         amp,
@@ -516,6 +532,8 @@ new P5((p: P5) => {
     } else {
       const bgCtx = bgCanvas.getContext("2d");
       if (bgCtx) drawBackground2D(bgCtx, bgCanvas.width, bgCanvas.height, timeSec, energy);
+      if (!creaturesCtx) creaturesCtx = creaturesCanvas.getContext("2d");
+      if (creaturesCtx && creatureImages) drawCreatures2D(creaturesCtx, width, height, creatureField.poses, creatureImages);
     }
 
     const ctx = p.drawingContext;

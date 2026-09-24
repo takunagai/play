@@ -77,8 +77,13 @@ strong {
   z-index: 1;
 }
 
-#gl {
+/* 浮遊生物（standard のみ。rich では #gl のシェーダが背景と泡の間に描く） */
+#creatures {
   z-index: 2;
+}
+
+#gl {
+  z-index: 3;
   /* WebGL2 が無効なときは standard の #bg のみが見える */
   display: none;
 }
@@ -86,11 +91,11 @@ strong {
 #p5-host {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 4;
 }
 
 #glow {
-  z-index: 4;
+  z-index: 5;
   mix-blend-mode: screen;
 }
 

@@ -118,5 +118,17 @@ export const GL_MAX_DEVICE_PIXEL_RATIO = 1.5;
 // ---- 低解像度レイヤー（#bg, #glow は CSS px の 1/4 で描く） ----
 export const LOW_RES_DIVISOR = 4;
 
+// ---- 浮遊生物（7.5） ----
+/** 全種共通の不透明度 */
+export const CREATURE_OPACITY = 0.25;
+/** 大きさの基準長 = min(画面幅, 画面高さ × この比)。16:9 基準で調整した比率を縦長・超横長でも破綻させない */
+export const CREATURE_BASE_ASPECT = 16 / 9;
+/** 昇る種類の速さ（画面高さ比 / 秒）。画面を抜けるまで 40〜70 秒 */
+export const CREATURE_RISE_SPEED_MIN = 0.014;
+export const CREATURE_RISE_SPEED_MAX = 0.024;
+/** 横に進む種類の速さ（画面幅比 / 秒） */
+export const CREATURE_GLIDE_SPEED_MIN = 0.018;
+export const CREATURE_GLIDE_SPEED_MAX = 0.03;
+
 // ---- ホバー（デスクトップ） ----
 export const HOVER_HIGHLIGHT_RADIUS_SLOP_PX = 4;
