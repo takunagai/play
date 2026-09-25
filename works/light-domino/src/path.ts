@@ -145,3 +145,52 @@ export function buildDominoes(points: readonly Vec2[], widthPx: number, heightPx
   }
   return dominoes;
 }
+
+function orientation(a: Vec2, b: Vec2, c: Vec2): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function segmentsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const abC = orientation(a, b, c);
+  const abD = orientation(a, b, d);
+  const cdA = orientation(c, d, a);
+  const cdB = orientation(c, d, b);
+  return abC * abD < 0 && cdA * cdB < 0;
+}
+
+/** 自道の非隣接セグメントとの交差に接する点を返す。DOM・canvas 非依存。 */
+export function crossingFlags(points: readonly Vec2[]): boolean[] {
+  const flags = points.map(() => false);
+  for (let first = 0; first < points.length - 1; first++) {
+    for (let second = first + 2; second < points.length - 1; second++) {
+      if (first === 0 && second === points.length - 2) continue;
+      if (!segmentsCross(points[first], points[first + 1], points[second], points[second + 1])) continue;
+      flags[first] = true;
+      flags[first + 1] = true;
+      flags[second] = true;
+      flags[second + 1] = true;
+    }
+  }
+  return flags;
+}
+
+function distanceToSegment(point: Vec2, start: Vec2, end: Vec2): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const denominator = dx * dx + dy * dy;
+  if (denominator === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.min(1, Math.max(0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / denominator));
+  return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+}
+
+/** 既存道のいずれかと thresholdPx 未満で並走する点を返す。 */
+export function parallelFlags(points: readonly Vec2[], committedPaths: readonly (readonly Vec2[])[], thresholdPx: number): boolean[] {
+  return points.map((point) =>
+    committedPaths.some((path) => {
+      for (let index = 1; index < path.length; index++) {
+        if (distanceToSegment(point, path[index - 1], path[index]) < thresholdPx) return true;
+      }
+      return false;
+    }),
+  );
+}

@@ -4,6 +4,7 @@
 // ============================================================
 
 import { scaleMidiRange, SCALES, type ScaleName } from "./scale";
+import { ACCUMULATION_VELOCITY_BOOST, CROSSING_VELOCITY_BOOST, PARALLEL_VELOCITY_BOOST } from "./tuning";
 
 export const SCALE: ScaleName = "メジャーペンタ";
 /** C メジャーペンタのステップ（半音） */
@@ -35,4 +36,15 @@ export function pitchForProgress(progress: number): { midi: number; degree: numb
 /** タップした端を 0 とする連鎖順から、常に上昇する音程を返す。 */
 export function pitchForChainIndex(index: number, count: number): { midi: number; degree: number } {
   return pitchForProgress(count <= 1 ? 0 : index / (count - 1));
+}
+
+/** 交叉・並走・蓄積を既存 AudioEngine 契約の velocity へ写像する。 */
+export function velocityForInteraction(crossing: boolean, parallel: boolean, accumulated: boolean): number {
+  return Math.min(
+    1,
+    0.85 +
+      (crossing ? CROSSING_VELOCITY_BOOST : 0) +
+      (parallel ? PARALLEL_VELOCITY_BOOST : 0) +
+      (accumulated ? ACCUMULATION_VELOCITY_BOOST : 0),
+  );
 }

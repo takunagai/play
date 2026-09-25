@@ -6,6 +6,8 @@
 
 // ---- パレット（docs/concept.md の指定色）----
 export const PALETTE_BACKGROUND = "#111318";
+export const PALETTE_COOL_GLOW = "#1A1F29";
+export const PALETTE_WARM_GLOW = "#2A2620";
 export const PALETTE_TILE = "#FFF4E0";
 export const PALETTE_GOLD = "#FFC857";
 
@@ -17,7 +19,7 @@ export const RAW_POINT_MIN_INTERVAL_MS = 16;
 /** 手ぶれ補正の移動平均に使う直近点数 */
 export const SMOOTHING_WINDOW_POINTS = 5;
 /** 入力を画面端から内側へ clamp する幅（px） */
-export const INPUT_EDGE_INSET_PX = 12;
+export const INPUT_EDGE_INSET_PX = 24;
 /** aligned で端以外を押して、ここを超えた移動で新しい列の描画を始める距離（px） */
 export const DRAG_START_DISTANCE_PX = 10;
 
@@ -116,3 +118,70 @@ export const QUALITY_WARMUP_MS = 3000;
 export const QUALITY_SLOW_FRAME_MEDIAN_MS = 24;
 /** フレーム間隔の変動係数がこれ未満なら、遅くても rAF 制限（省エネの 30Hz 等）とみなして下げない */
 export const QUALITY_THROTTLE_MAX_VARIATION = 0.12;
+
+// ---- 再設計: 展示室の床 ----
+export const FLOOR_GUIDE_SPACING_PX = 48;
+export const MOBILE_FLOOR_GUIDE_SPACING_PX = 32;
+export const FLOOR_GUIDE_ALPHA = 0.03;
+export const FLOOR_GLOW_RADIUS_RATIO = 0.55;
+export const FLOOR_GLOW_ALPHA_START = 0.5;
+export const FLOOR_GLOW_ALPHA_END = 0.8;
+export const CHAIN_LIGHT_SLIDE_MS = 500;
+export const CHAIN_LIGHT_RECENT_TILES = 4;
+
+// ---- 再設計: 板の物体表現 ----
+export const TILE_WIDTH_PX = 10;
+export const TILE_DEPTH_PX = 6;
+export const MOBILE_TILE_WIDTH_PX = 8;
+export const MOBILE_TILE_DEPTH_PX = 5;
+export const FALLEN_TILE_LENGTH_PX = 22;
+export const MOBILE_FALLEN_TILE_LENGTH_PX = 18;
+export const PORTRAIT_SCALE = 1.2;
+export const TILE_SIDE_BAND_ALPHA = 0.35;
+export const TILE_OUTLINE_ALPHA = 0.25;
+export const EDGE_REFLECTION_ALPHA = 0.4;
+export const SHADOW_ALPHA = 0.5;
+export const FALLEN_GLOW_ALPHA = 0.08;
+export const FALLEN_GLOW_REST_ALPHA = 0.03;
+
+// ---- 再設計: 各状態の主役 ----
+export const SLEEPING_LIGHT_COUNT_MIN = 12;
+export const SLEEPING_LIGHT_COUNT_MAX = 18;
+export const SLEEPING_LIGHT_PERIOD_MIN_MS = 4000;
+export const SLEEPING_LIGHT_PERIOD_MAX_MS = 7000;
+export const SLEEPING_GLOW_ALPHA = 0.05;
+export const AWAKEN_LIGHT_ALPHA = 0.9;
+export const TRACING_TILE_ALPHA = 0.55;
+export const TRACING_TILE_HEAD_ALPHA = 0.9;
+export const TRACING_ECHO_RADIUS_PX = 6;
+export const TRACING_ECHO_ALPHA = 0.15;
+export const TRACING_ECHO_MS = 120;
+export const ENDPOINT_BLINK_HZ_ALIGNED = 1.2;
+export const ENDPOINT_BLINK_TILES = 3;
+export const MOBILE_ENDPOINT_BLINK_TILES = 2;
+export const ENDPOINT_BLINK_PHASE_STAGGER_MS = 80;
+
+// ---- 再設計: 連鎖・開花・星図 ----
+export const PULSE_START_RADIUS_PX = 18;
+export const PULSE_END_RADIUS_PX = 34;
+export const MOBILE_PULSE_START_RADIUS_PX = 14;
+export const MOBILE_PULSE_END_RADIUS_PX = 28;
+export const PULSE_MAX_CONCURRENT = 2;
+export const NODE_RADIUS_PX = 2;
+export const NODE_HALO_RADIUS_PX = 5;
+export const NODE_HALO_ALPHA = 0.3;
+export const MAX_LIVE_NODES = 300;
+export const FINALE_BLOOM_DELAY_MS = 200;
+export const FINALE_BLOOM_MS = 800;
+export const FINALE_BLOOM_CORE_WIDTH_PX = 3;
+export const FINALE_BLOOM_GLOW_ALPHA = 0.1;
+export const FINALE_BLOOM_GLOW_WIDTH_PX = 24;
+export const FINALE_SHOCKWAVE_RADIUS_RATIO = 0.4;
+export const FINALE_SHOCKWAVE_ALPHA = 0.12;
+export const COMMIT_RETRACE_MS = 500;
+export const AFTERGLOW_FADE_MS = 10000;
+export const CROSSING_VELOCITY_BOOST = 0.08;
+export const PARALLEL_VELOCITY_BOOST = 0.08;
+export const ACCUMULATION_VELOCITY_BOOST = 0.05;
+export const PARALLEL_RUN_MIN_GAP_PX = 6;
+export const IGNORE_BAND_BOTTOM_PX = 48;
