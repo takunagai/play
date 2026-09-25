@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Prism Pop</title>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="bg"></canvas>
+      <canvas id="creatures"></canvas>
+      <canvas id="gl"></canvas>
+      <div id="p5-host"></div>
+      <canvas id="glow"></canvas>
+    </div>
+    <div id="gate" aria-hidden="true">
+      <h1 id="gate-title">Prism Pop</h1>
+      <p id="gate-text">触れて、はじけさせて</p>
+    </div>
+    <pre id="debug-overlay" hidden></pre>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
