@@ -8,4 +8,6 @@
     // html_handling は既定の auto-trailing-slash（/works/<slug>/ はフォルダの index.html として配信される）
   },
   "routes": [{ "pattern": "play.nagai-shouten.com", "custom_domain": true }],
+  // PR ブランチのビルドは Workers Builds が npx wrangler preview を実行する。Preview には previews ブロックが必須（中身は空でよい）
+  "previews": {},
 }
