@@ -9,54 +9,103 @@ import "./style.css";
 
 import { fallProgress } from "./chain";
 import { createFrameCounter, installArtHook } from "./art-hook";
-import { buildDominoes, pathLength, resampleByArcLength, smoothPoints, type Domino, type Vec2 } from "./path";
-import { pitchForChainIndex } from "./music";
+import {
+  buildDominoes,
+  crossingFlags,
+  parallelFlags,
+  pathLength,
+  resampleByArcLength,
+  smoothPoints,
+  type Domino,
+  type Vec2,
+} from "./path";
+import { pitchForChainIndex, velocityForInteraction } from "./music";
 import { QualityController } from "./quality";
 import type { ChainEvent, ChainSchedule } from "./audio/engine";
 import { createAudioEngine } from "./audio/engine";
 import {
+  AFTERGLOW_FADE_MS,
+  CHAIN_LIGHT_RECENT_TILES,
+  CHAIN_LIGHT_SLIDE_MS,
+  COMMIT_RETRACE_MS,
   DOMINO_SPACING_MAX_PX,
   DOMINO_SPACING_MIN_PX,
   DOMINO_SPACING_RATIO,
   DRAG_START_DISTANCE_PX,
-  ENDPOINT_BLINK_HZ,
+  EDGE_REFLECTION_ALPHA,
+  ENDPOINT_BLINK_HZ_ALIGNED,
+  ENDPOINT_BLINK_PHASE_STAGGER_MS,
+  ENDPOINT_BLINK_TILES,
   ENDPOINT_FLASH_MS,
   ENDPOINT_HIT_MIN_PX,
   ENDPOINT_HIT_RATIO,
-  FALL_ANGLE_RAD,
   FALL_MS,
-  FINALE_GLOW_MS,
+  FALLEN_GLOW_ALPHA,
+  FALLEN_GLOW_REST_ALPHA,
+  FALLEN_TILE_LENGTH_PX,
+  FINALE_BLOOM_CORE_WIDTH_PX,
+  FINALE_BLOOM_DELAY_MS,
+  FINALE_BLOOM_GLOW_ALPHA,
+  FINALE_BLOOM_GLOW_WIDTH_PX,
+  FINALE_BLOOM_MS,
+  FINALE_SHOCKWAVE_ALPHA,
+  FINALE_SHOCKWAVE_RADIUS_RATIO,
+  FLOOR_GLOW_ALPHA_END,
+  FLOOR_GLOW_ALPHA_START,
+  FLOOR_GLOW_RADIUS_RATIO,
+  FLOOR_GUIDE_ALPHA,
+  FLOOR_GUIDE_SPACING_PX,
   GLOW_CANVAS_DIVISOR,
-  GLOW_FINALE_ALPHA,
   GLOW_PULSE_AMPLITUDE,
-  GLOW_TILE_ALPHA,
   HUSH_GLOW_DIM,
+  IGNORE_BAND_BOTTOM_PX,
   INPUT_EDGE_INSET_PX,
   INTRO_FADE_MS,
   MAX_COMMITTED_TRAILS,
   MAX_DOMINOES,
+  MAX_LIVE_NODES,
   MIN_DOMINOES,
   MIN_PATH_LENGTH_PX,
+  MOBILE_ENDPOINT_BLINK_TILES,
+  MOBILE_FALLEN_TILE_LENGTH_PX,
+  MOBILE_FLOOR_GUIDE_SPACING_PX,
+  MOBILE_PULSE_END_RADIUS_PX,
+  MOBILE_PULSE_START_RADIUS_PX,
+  MOBILE_TILE_DEPTH_PX,
+  MOBILE_TILE_WIDTH_PX,
+  NODE_HALO_ALPHA,
+  NODE_HALO_RADIUS_PX,
+  NODE_RADIUS_PX,
   PALETTE_BACKGROUND,
   PALETTE_GOLD,
   PALETTE_TILE,
+  PARALLEL_RUN_MIN_GAP_PX,
   PARTICLE_CAP_STEPS,
+  PORTRAIT_SCALE,
+  PULSE_END_RADIUS_PX,
+  PULSE_MAX_CONCURRENT,
+  PULSE_START_RADIUS_PX,
   RAW_POINT_MIN_DISTANCE_PX,
   RAW_POINT_MIN_INTERVAL_MS,
+  SHADOW_ALPHA,
   SHOCKWAVE_MS,
+  SLEEPING_GLOW_ALPHA,
+  SLEEPING_LIGHT_COUNT_MAX,
+  SLEEPING_LIGHT_COUNT_MIN,
+  SLEEPING_LIGHT_PERIOD_MAX_MS,
+  SLEEPING_LIGHT_PERIOD_MIN_MS,
   SMOOTHING_WINDOW_POINTS,
-  SPARK_LIFE_MAX_MS,
-  SPARK_LIFE_MIN_MS,
-  SPARK_SPEED_MAX_PX_S,
-  SPARK_SPEED_MIN_PX_S,
   STROKE_DISCARD_MS,
-  TILE_FADE_IN_MS,
-  TILE_LENGTH_MAX_PX,
-  TILE_LENGTH_MIN_PX,
-  TILE_LENGTH_RATIO,
-  TILE_THICKNESS_PX,
-  TRAIL_FADE_MS,
+  TILE_DEPTH_PX,
+  TILE_OUTLINE_ALPHA,
+  TILE_SIDE_BAND_ALPHA,
+  TILE_WIDTH_PX,
   TRAIL_WIDTH_PX,
+  TRACING_ECHO_ALPHA,
+  TRACING_ECHO_MS,
+  TRACING_ECHO_RADIUS_PX,
+  TRACING_TILE_ALPHA,
+  TRACING_TILE_HEAD_ALPHA,
 } from "./tuning";
 
 type State = "intro" | "tracing" | "aligned" | "chain" | "finale";
@@ -78,13 +127,25 @@ interface SettlingStroke {
   goldThrough: number;
 }
 
-interface Spark {
+interface LightPulse {
   x: number;
   y: number;
-  vx: number;
-  vy: number;
   bornAtMs: number;
-  lifeMs: number;
+}
+
+interface SleepingLight {
+  nx: number;
+  ny: number;
+  radius: number;
+  phase: number;
+  periodMs: number;
+  awakenedAtMs: number | null;
+}
+
+interface TraceEcho {
+  x: number;
+  y: number;
+  bornAtMs: number;
 }
 
 interface Shockwave {
@@ -104,7 +165,9 @@ interface CommittedTrail {
   /** 画面正規化座標の点列 */
   points: Vec2[];
   bornAtMs: number;
-  fadingSinceMs: number | null;
+  retraceStartedMs: number;
+  crossing: boolean[];
+  parallel: boolean[];
 }
 
 const audio = createAudioEngine();
@@ -129,13 +192,16 @@ let schedule: ChainSchedule | null = null;
 let chainEvents: ChainEvent[] = [];
 let chainDirectionFromEnd = false; // true = 列の終端側から倒す
 let finaleAtMs: number | null = null; // 最後の板が床へ触れた（発光の起点）
-let sparks: Spark[] = [];
+let pulses: LightPulse[] = [];
 let shockwaves: Shockwave[] = [];
+let traceEchoes: TraceEcho[] = [];
+let sleepingLights: SleepingLight[] = [];
 let trails: CommittedTrail[] = [];
 let introTiles: Domino[] = []; // 導入画面の休止中の板
 let introFadeStartedMs: number | null = null;
 let endpointFlashAtMs: { start: number; end: number } | null = null;
 let pendingReplacement: PendingReplacement | null = null;
+let floorLightCenter: Vec2 = { x: 0.5, y: 0.5 };
 
 // リサイズで再構築するため正規化座標を保持する
 let normalizedStrokePoints: Vec2[] | null = null;
@@ -154,11 +220,12 @@ function clampToBounds(point: Vec2, bounds: { x: number; y: number; w: number; h
 }
 
 function dominoSpacingPx(shortEdge: number): number {
+  if (shortEdge <= 430) return 12;
   return Math.min(DOMINO_SPACING_MAX_PX, Math.max(DOMINO_SPACING_MIN_PX, shortEdge * DOMINO_SPACING_RATIO));
 }
 
 function tileLengthPx(shortEdge: number): number {
-  return Math.min(TILE_LENGTH_MAX_PX, Math.max(TILE_LENGTH_MIN_PX, shortEdge * TILE_LENGTH_RATIO));
+  return shortEdge <= 430 ? MOBILE_FALLEN_TILE_LENGTH_PX : FALLEN_TILE_LENGTH_PX;
 }
 
 /** 補正済みの点列から仮配置を作り直す（呼び出し側で発音を間引く） */
@@ -213,13 +280,31 @@ function buildIntroTiles(width: number, height: number): Domino[] {
   const spacing = dominoSpacingPx(Math.min(width, height));
   const cx = width / 2;
   const cy = height * 0.62;
-  const count = 9;
+  const count = 5;
   const points: Vec2[] = [];
   for (let index = 0; index < count; index++) {
-    const t = (index - (count - 1) / 2) * spacing;
+    const t = (index - (count - 1) / 2) * spacing * 1.35;
     points.push({ x: cx + t, y: cy + Math.sin(index * 0.9) * spacing * 0.35 });
   }
   return buildDominoes(points, width, height, 0);
+}
+
+/** リサイズしても配置の物語が変わらない決定的な「眠る光」。 */
+function buildSleepingLights(): SleepingLight[] {
+  const count = SLEEPING_LIGHT_COUNT_MIN + 3;
+  return Array.from({ length: Math.min(count, SLEEPING_LIGHT_COUNT_MAX) }, (_, index) => {
+    const column = index % 5;
+    const row = Math.floor(index / 5);
+    return {
+      nx: 0.12 + column * 0.19 + ((row * 0.037 + index * 0.013) % 0.055),
+      ny: 0.12 + row * 0.19 + ((column * 0.041 + index * 0.017) % 0.075),
+      radius: 1 + (index % 3) * 0.45,
+      phase: (index * 1.618) % (Math.PI * 2),
+      periodMs: SLEEPING_LIGHT_PERIOD_MIN_MS +
+        (index / Math.max(1, count - 1)) * (SLEEPING_LIGHT_PERIOD_MAX_MS - SLEEPING_LIGHT_PERIOD_MIN_MS),
+      awakenedAtMs: null,
+    };
+  });
 }
 
 installArtHook({
@@ -247,65 +332,73 @@ function renderDebugOverlay(): void {
     .join("\n");
 }
 
+P5.disableFriendlyErrors = true;
+
 new P5((p: P5) => {
   let glowCanvas: HTMLCanvasElement | null = null;
   let trailCanvas: HTMLCanvasElement | null = null;
 
   const ensureLayers = (): void => {
-    // グローは縮小キャンバスを別 DOM レイヤーへ置き、CSS 拡大 + screen 合成でぼかす
-    // （本体への加算はトレイルと帰還ループになり白飽和する。pitfalls.md）
+    // グローは縮小キャンバスを別 DOM レイヤーへ置き、CSS 拡大で柔らかくする。
     if (!glowCanvas && glowHostEl) {
       glowCanvas = document.createElement("canvas");
-      glowCanvas.width = Math.max(1, Math.floor(p.width / GLOW_CANVAS_DIVISOR));
-      glowCanvas.height = Math.max(1, Math.floor(p.height / GLOW_CANVAS_DIVISOR));
       glowHostEl.appendChild(glowCanvas);
-    } else if (glowCanvas && (glowCanvas.width !== Math.floor(p.width / GLOW_CANVAS_DIVISOR) || glowCanvas.height !== Math.floor(p.height / GLOW_CANVAS_DIVISOR))) {
-      glowCanvas.width = Math.max(1, Math.floor(p.width / GLOW_CANVAS_DIVISOR));
-      glowCanvas.height = Math.max(1, Math.floor(p.height / GLOW_CANVAS_DIVISOR));
     }
-    if (!trailCanvas) {
-      trailCanvas = document.createElement("canvas");
-      trailCanvas.width = p.width;
-      trailCanvas.height = p.height;
-      hostEl?.appendChild(trailCanvas);
-    } else if (trailCanvas.width !== p.width || trailCanvas.height !== p.height) {
-      // 同じ DOM canvas を再利用する。寸法変更で画素は消えるが、直後に正規化データから再描画する。
+    if (glowCanvas) {
+      const width = Math.max(1, Math.floor(p.width / GLOW_CANVAS_DIVISOR));
+      const height = Math.max(1, Math.floor(p.height / GLOW_CANVAS_DIVISOR));
+      if (glowCanvas.width !== width || glowCanvas.height !== height) {
+        glowCanvas.width = width;
+        glowCanvas.height = height;
+      }
+    }
+    if (!trailCanvas) trailCanvas = document.createElement("canvas");
+    if (trailCanvas.width !== p.width || trailCanvas.height !== p.height) {
       trailCanvas.width = p.width;
       trailCanvas.height = p.height;
     }
   };
 
-  /** 光跡レイヤーを確定曲線で塗る（resize / fade の再描画） */
+  /** 蕊と節点を永続する星図レイヤーへ焼き付ける。 */
   const repaintTrailLayer = (): void => {
     if (!trailCanvas) return;
-    const ctx = trailCanvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = PALETTE_GOLD;
+    const trailCtx = trailCanvas.getContext("2d");
+    if (!trailCtx) return;
+    trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+    trailCtx.lineCap = "round";
+    trailCtx.lineJoin = "round";
+    trailCtx.strokeStyle = PALETTE_GOLD;
+    let nodeCount = 0;
     for (const trail of trails) {
-      let alpha = 1;
-      if (trail.fadingSinceMs !== null) {
-        alpha = Math.max(0, 1 - (performance.now() - trail.fadingSinceMs) / TRAIL_FADE_MS);
-      }
-      if (alpha <= 0) continue;
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = TRAIL_WIDTH_PX;
-      ctx.beginPath();
+      trailCtx.globalAlpha = trails.length > 8 ? 0.8 : 1;
+      trailCtx.lineWidth = TRAIL_WIDTH_PX;
+      trailCtx.beginPath();
       trail.points.forEach((point, index) => {
         const x = point.x * p.width;
         const y = point.y * p.height;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (index === 0) trailCtx.moveTo(x, y);
+        else trailCtx.lineTo(x, y);
       });
-      if (trail.points.length === 1) {
-        const only = trail.points[0];
-        ctx.lineTo(only.x * p.width + 0.01, only.y * p.height);
+      trailCtx.stroke();
+      for (let index = 0; index < trail.points.length; index++) {
+        const point = trail.points[index];
+        if (trail.crossing[index]) continue;
+        if (nodeCount >= MAX_LIVE_NODES) break;
+        const x = point.x * p.width;
+        const y = point.y * p.height;
+        trailCtx.globalAlpha = NODE_HALO_ALPHA;
+        trailCtx.fillStyle = PALETTE_GOLD;
+        trailCtx.beginPath();
+        trailCtx.arc(x, y, NODE_HALO_RADIUS_PX, 0, Math.PI * 2);
+        trailCtx.fill();
+        trailCtx.globalAlpha = 1;
+        trailCtx.beginPath();
+        trailCtx.arc(x, y, NODE_RADIUS_PX, 0, Math.PI * 2);
+        trailCtx.fill();
+        nodeCount++;
       }
-      ctx.stroke();
     }
-    ctx.globalAlpha = 1;
+    trailCtx.globalAlpha = 1;
   };
 
   const rebuildAfterResize = (): void => {
@@ -331,6 +424,8 @@ new P5((p: P5) => {
     if (!force && nowMs - stroke.lastRecordedAtMs < RAW_POINT_MIN_INTERVAL_MS) return;
     stroke.lastRecordedAtMs = nowMs;
     stroke.rawPoints.push({ x, y });
+    traceEchoes.push({ x, y, bornAtMs: nowMs });
+    if (traceEchoes.length > 12) traceEchoes.shift();
     const before = stroke.dominoes.length;
     rebuildPreviewDominoes(stroke, p.width, p.height);
     normalizedStrokePoints = stroke.dominoes.map((domino) => ({ x: domino.nx, y: domino.ny }));
@@ -387,9 +482,20 @@ new P5((p: P5) => {
     chainDirectionFromEnd = distEnd <= distStart;
 
     const ordered = chainDirectionFromEnd ? [...settled.dominoes].reverse() : settled.dominoes;
+    const pixelPoints = settled.dominoes.map((domino) => ({ x: domino.nx * width, y: domino.ny * height }));
+    const existingPixelPaths = trails.map((trail) => trail.points.map((point) => ({ x: point.x * width, y: point.y * height })));
+    const crossings = crossingFlags(pixelPoints);
+    const parallels = parallelFlags(pixelPoints, existingPixelPaths, PARALLEL_RUN_MIN_GAP_PX);
+    const orderedCrossings = chainDirectionFromEnd ? [...crossings].reverse() : crossings;
+    const orderedParallels = chainDirectionFromEnd ? [...parallels].reverse() : parallels;
     chainEvents = ordered.map((domino, index) => {
       const pitch = pitchForChainIndex(index, ordered.length);
-      return { x: domino.nx, y: domino.ny, midi: pitch.midi, velocity: 0.85 };
+      return {
+        x: domino.nx,
+        y: domino.ny,
+        midi: pitch.midi,
+        velocity: velocityForInteraction(orderedCrossings[index] ?? false, orderedParallels[index] ?? false, trails.length > 0),
+      };
     });
     schedule = audio.beginChain(chainEvents);
     settled.goldThrough = -1;
@@ -399,33 +505,22 @@ new P5((p: P5) => {
 
   const commitTrailAndSparks = (): void => {
     if (!settled || !normalizedStrokePoints) return;
-    // 光跡を静的レイヤーへ焼き付ける
-    trails.push({ points: normalizedStrokePoints.map((point) => ({ x: point.x, y: point.y })), bornAtMs: performance.now(), fadingSinceMs: null });
-    if (trails.length > MAX_COMMITTED_TRAILS) {
-      const oldest = trails[0];
-      if (oldest.fadingSinceMs === null) oldest.fadingSinceMs = performance.now();
-    }
-    trails = trails.filter((trail) => trail.fadingSinceMs === null || performance.now() - trail.fadingSinceMs < TRAIL_FADE_MS);
+    const nowMs = performance.now();
+    const pixelPoints = normalizedStrokePoints.map((point) => ({ x: point.x * p.width, y: point.y * p.height }));
+    const existingPixelPaths = trails.map((trail) => trail.points.map((point) => ({ x: point.x * p.width, y: point.y * p.height })));
+    trails.push({
+      points: normalizedStrokePoints.map((point) => ({ x: point.x, y: point.y })),
+      bornAtMs: nowMs,
+      retraceStartedMs: nowMs,
+      crossing: crossingFlags(pixelPoints),
+      parallel: parallelFlags(pixelPoints, existingPixelPaths, PARALLEL_RUN_MIN_GAP_PX),
+    });
+    // 既存契約どおり trail の保持単位は最大 24。本数を超えても現在の星図は 24 本分残る。
+    if (trails.length > MAX_COMMITTED_TRAILS) trails.shift();
     repaintTrailLayer();
 
-    // 終演の衝撃波とスパークル
-    const mid = normalizedStrokePoints[Math.floor(normalizedStrokePoints.length / 2)];
-    shockwaves.push({ x: mid.x * p.width, y: mid.y * p.height, bornAtMs: performance.now() });
-    const cap = PARTICLE_CAP_STEPS[quality.getLevel()];
-    const originPoints = normalizedStrokePoints.filter((_, index) => index % Math.max(1, Math.ceil(normalizedStrokePoints!.length / cap)) === 0);
-    for (const point of originPoints) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = SPARK_SPEED_MIN_PX_S + Math.random() * (SPARK_SPEED_MAX_PX_S - SPARK_SPEED_MIN_PX_S);
-      sparks.push({
-        x: point.x * p.width,
-        y: point.y * p.height,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        bornAtMs: performance.now(),
-        lifeMs: SPARK_LIFE_MIN_MS + Math.random() * (SPARK_LIFE_MAX_MS - SPARK_LIFE_MIN_MS),
-      });
-    }
-    if (sparks.length > cap) sparks = sparks.slice(sparks.length - cap);
+    const endpoint = normalizedStrokePoints[normalizedStrokePoints.length - 1];
+    shockwaves.push({ x: endpoint.x * p.width, y: endpoint.y * p.height, bornAtMs: nowMs });
   };
 
   p.setup = () => {
@@ -434,6 +529,7 @@ new P5((p: P5) => {
     // p5 v2 の既知の制約: pixelDensity は createCanvas の後に呼ぶ
     p.pixelDensity(1);
     introTiles = buildIntroTiles(p.width, p.height);
+    sleepingLights = buildSleepingLights();
     ensureLayers();
 
     const resize = (): void => {
@@ -453,6 +549,12 @@ new P5((p: P5) => {
         const x = event.clientX;
         const y = event.clientY;
         if (state === "intro") {
+          // 最初の接触に近い 3 点が文字より先に目覚める。
+          const nearest = sleepingLights
+            .map((light, index) => ({ index, distance: Math.hypot(light.nx * p.width - x, light.ny * p.height - y) }))
+            .sort((a, b) => a.distance - b.distance)
+            .slice(0, 3);
+          for (const item of nearest) sleepingLights[item.index].awakenedAtMs = performance.now();
           // 最初のタップは道の始点にしない。オーバーレイを消して音を配線する
           gateEl?.classList.add("is-hidden");
           introFadeStartedMs = performance.now();
@@ -464,6 +566,7 @@ new P5((p: P5) => {
           return;
         }
         if (state === "tracing") {
+          if (y > p.height - IGNORE_BAND_BOTTOM_PX) return;
           beginTrace(x, y);
           return;
         }
@@ -482,8 +585,8 @@ new P5((p: P5) => {
           }
           return;
         }
-        if (state === "finale") {
-          // 光跡は残したまま次の道を描ける
+        if (state === "finale" && !settled && !schedule) {
+          // 光跡は残したまま次の道を描ける。開花中は入力を受けない。
           beginTrace(x, y);
         }
         // chain 状態では入力を受けない（タイムラインは中断しない）
@@ -534,27 +637,37 @@ new P5((p: P5) => {
     const drawStartMs = performance.now();
     const nowMs = drawStartMs;
     quality.recordFrame(Math.min(p.deltaTime || 16.7, 100));
-    lastAmp = audio.getAmp(); // analyser の読み出しは 1 フレーム 1 回
-
+    lastAmp = audio.getAmp();
     ensureLayers();
-    if (trails.some((trail) => trail.fadingSinceMs !== null)) {
-      trails = trails.filter((trail) => trail.fadingSinceMs === null || nowMs - trail.fadingSinceMs < TRAIL_FADE_MS);
-      repaintTrailLayer();
-    }
     const ctx = p.drawingContext;
 
-    // ---- 状態の進行 ----
     if (discardDeadlineMs !== null && nowMs >= discardDeadlineMs && stroke) {
       stroke = null;
       discardDeadlineMs = null;
     }
-    if (state === "chain" && schedule && settled) {
-      const idx = settled.goldThrough;
-      let next = idx;
+    if ((state === "chain" || state === "finale") && schedule && settled) {
+      const previous = settled.goldThrough;
+      let next = previous;
       while (next + 1 < schedule.fallAtMs.length && nowMs >= schedule.fallAtMs[next + 1]) next++;
+      if (next > previous) {
+        const ordered = chainDirectionFromEnd ? [...settled.dominoes].reverse() : settled.dominoes;
+        for (let index = previous + 1; index <= next; index++) {
+          const domino = ordered[index];
+          if (domino) pulses.push({ x: domino.nx * p.width, y: domino.ny * p.height, bornAtMs: schedule.fallAtMs[index] });
+        }
+        pulses = pulses.slice(-PULSE_MAX_CONCURRENT);
+        const recent = ordered.slice(Math.max(0, next - CHAIN_LIGHT_RECENT_TILES + 1), next + 1);
+        if (recent.length > 0) {
+          const target = recent.reduce((sum, domino) => ({ x: sum.x + domino.nx, y: sum.y + domino.ny }), { x: 0, y: 0 });
+          const smoothing = Math.min(1, p.deltaTime / CHAIN_LIGHT_SLIDE_MS);
+          floorLightCenter.x += (target.x / recent.length - floorLightCenter.x) * smoothing;
+          floorLightCenter.y += (target.y / recent.length - floorLightCenter.y) * smoothing;
+        }
+      }
       settled.goldThrough = next;
       if (finaleAtMs === null && nowMs >= schedule.finaleAtMs) {
         finaleAtMs = schedule.finaleAtMs;
+        setStage("finale");
       }
       if (nowMs >= schedule.settleAtMs) {
         commitTrailAndSparks();
@@ -566,92 +679,64 @@ new P5((p: P5) => {
       }
     }
 
-    // ---- 1. 墨色の床（不透明・source-over）----
+    const chainProgress = settled && schedule
+      ? Math.max(0, settled.goldThrough + 1) / Math.max(1, settled.dominoes.length)
+      : 0;
+    const mixChannel = (start: number, end: number, amount: number): number => Math.round(start + (end - start) * amount);
+    const glowColor = `rgb(${mixChannel(26, 42, chainProgress)}, ${mixChannel(31, 38, chainProgress)}, ${mixChannel(41, 32, chainProgress)})`;
+
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
     ctx.fillStyle = PALETTE_BACKGROUND;
     ctx.fillRect(0, 0, p.width, p.height);
+    const floorX = floorLightCenter.x * p.width;
+    const floorY = floorLightCenter.y * p.height;
+    const radius = Math.min(p.width, p.height) * FLOOR_GLOW_RADIUS_RATIO;
+    const floorGlow = ctx.createRadialGradient(floorX, floorY, 0, floorX, floorY, Math.max(1, radius));
+    floorGlow.addColorStop(0, glowColor);
+    floorGlow.addColorStop(1, "rgba(17, 19, 24, 0)");
+    ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (FLOOR_GLOW_ALPHA_END - FLOOR_GLOW_ALPHA_START) * chainProgress;
+    ctx.fillStyle = floorGlow;
+    const portraitScaleY = p.height > p.width ? 4 / 3 : 1;
+    ctx.save();
+    ctx.translate(floorX, floorY);
+    ctx.scale(1, portraitScaleY);
+    ctx.translate(-floorX, -floorY);
+    ctx.fillRect(0, 0, p.width, p.height / portraitScaleY);
+    ctx.restore();
+    const gridSpacing = p.width <= 430 ? MOBILE_FLOOR_GUIDE_SPACING_PX : FLOOR_GUIDE_SPACING_PX;
+    ctx.globalAlpha = FLOOR_GUIDE_ALPHA;
+    ctx.strokeStyle = PALETTE_TILE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = gridSpacing / 2; x < p.width; x += gridSpacing) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, p.height);
+    }
+    for (let y = gridSpacing / 2; y < p.height; y += gridSpacing) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(p.width, y);
+    }
+    ctx.stroke();
     ctx.restore();
 
-    // ---- 2. 静的な光跡レイヤー（trail canvas は DOM で下に置く方式に変更）----
-    // trailCanvas は p5 キャンバスの下に置くため、ここでは触らない
+    if (trailCanvas) ctx.drawImage(trailCanvas, 0, 0);
 
-    // ---- 3. 板列 ----
-    const shortEdge = Math.min(p.width, p.height);
-    const tileLen = tileLengthPx(shortEdge);
     const glowCtx = glowCanvas?.getContext("2d") ?? null;
-    if (glowCtx && glowCanvas) {
-      glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
-    }
-
-    // 終演パルス（amp 0..1 で ±8%）。音→視覚の逆流線はこの 1 本
-    let glowPulse = 1;
-    if (finaleAtMs !== null) {
-      const glowElapsed = nowMs - finaleAtMs;
-      const rise = Math.min(1, glowElapsed / FINALE_GLOW_MS);
-      glowPulse = (1 + GLOW_PULSE_AMPLITUDE * lastAmp * 2) * (0.4 + 0.6 * rise);
-    }
-
-    // 連鎖中の描画準備。hushAtMs は「間」の開始（最後の板の着地の 160ms 前）
-    const hushStartMs = schedule ? schedule.hushAtMs : Number.POSITIVE_INFINITY;
-    const finaleActive = finaleAtMs !== null && nowMs < (schedule?.settleAtMs ?? Number.POSITIVE_INFINITY);
-
-    const drawDomino = (domino: Domino, color: string, alpha: number, fallMsOffset: number | null): void => {
-      const x = domino.nx * p.width;
-      const y = domino.ny * p.height;
-      let angle = Math.atan2(domino.ty, domino.tx);
-      let scaleX = 1;
-      let scaleY = 1;
-      if (fallMsOffset !== null) {
-        // 倒れ: 接線方向へ中心をずらし、長さ方向を広げ、厚みを縮める
-        const progress = fallProgress(fallMsOffset, FALL_MS);
-        angle += FALL_ANGLE_RAD * progress;
-        scaleX = 1 + 0.9 * progress;
-        scaleY = Math.max(0.35, 1 - 0.65 * progress);
-      }
-      ctx.save();
-      ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = alpha;
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.scale(scaleX, scaleY);
-      ctx.fillStyle = color;
-      // 板は中心の周りに短冊（長さ × 厚み）。影を 1 本だけ添える
-      if (fallMsOffset === null) {
-        ctx.globalAlpha = alpha * 0.25;
-        ctx.fillRect(-tileLen / 2 + 1.5, -TILE_THICKNESS_PX / 2 + 2, tileLen, TILE_THICKNESS_PX);
-        ctx.globalAlpha = alpha;
-      }
-      ctx.fillRect(-tileLen / 2, -TILE_THICKNESS_PX / 2, tileLen, TILE_THICKNESS_PX);
-      ctx.restore();
-    };
-
-    const glowTile = (domino: Domino, alpha: number, scale: number): void => {
-      if (!glowCtx || !glowCanvas) return;
-      const x = (domino.nx * p.width) / GLOW_CANVAS_DIVISOR;
-      const y = (domino.ny * p.height) / GLOW_CANVAS_DIVISOR;
+    if (glowCtx && glowCanvas) glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
+    const glowGoldPath = (points: readonly Vec2[], alpha: number, widthPx = 24, fraction = 1): void => {
+      if (!glowCtx || !glowCanvas || points.length < 2 || alpha <= 0) return;
+      const count = Math.max(2, Math.ceil(points.length * Math.min(1, Math.max(0, fraction))));
       glowCtx.save();
       glowCtx.globalCompositeOperation = "lighter";
-      glowCtx.globalAlpha = alpha;
-      glowCtx.fillStyle = PALETTE_TILE;
-      const size = ((tileLen * 1.6) / GLOW_CANVAS_DIVISOR) * scale;
-      glowCtx.beginPath();
-      glowCtx.ellipse(x, y, size, (TILE_THICKNESS_PX * 1.6) / GLOW_CANVAS_DIVISOR + size * 0.25, Math.atan2(domino.ty, domino.tx), 0, Math.PI * 2);
-      glowCtx.fill();
-      glowCtx.restore();
-    };
-
-    const glowGoldPath = (points: readonly Vec2[], alpha: number): void => {
-      if (!glowCtx || !glowCanvas) return;
-      glowCtx.save();
-      glowCtx.globalCompositeOperation = "lighter";
-      glowCtx.globalAlpha = alpha;
+      glowCtx.globalAlpha = Math.min(0.12, alpha);
       glowCtx.strokeStyle = PALETTE_GOLD;
-      glowCtx.lineWidth = (TRAIL_WIDTH_PX * 2.5) / GLOW_CANVAS_DIVISOR;
+      glowCtx.lineWidth = widthPx / GLOW_CANVAS_DIVISOR;
       glowCtx.lineCap = "round";
+      glowCtx.lineJoin = "round";
       glowCtx.beginPath();
-      points.forEach((point, index) => {
+      points.slice(0, count).forEach((point, index) => {
         const x = (point.x * p.width) / GLOW_CANVAS_DIVISOR;
         const y = (point.y * p.height) / GLOW_CANVAS_DIVISOR;
         if (index === 0) glowCtx.moveTo(x, y);
@@ -660,128 +745,243 @@ new P5((p: P5) => {
       glowCtx.stroke();
       glowCtx.restore();
     };
-
-    // 導入の板（フェードアウト）
-    if (introTiles.length > 0 && introFadeStartedMs !== null) {
-      const fade = Math.max(0, 1 - (nowMs - introFadeStartedMs) / INTRO_FADE_MS);
-      if (fade <= 0) introTiles = [];
-      else for (const domino of introTiles) drawDomino(domino, PALETTE_TILE, fade * 0.7, null);
-    } else if (state === "intro") {
-      for (const domino of introTiles) drawDomino(domino, PALETTE_TILE, 0.7, null);
+    const newestTrail = trails[trails.length - 1];
+    if (newestTrail) {
+      const afterglow = Math.max(0, 1 - (nowMs - newestTrail.bornAtMs) / AFTERGLOW_FADE_MS);
+      if (newestTrail.parallel.some((isParallel) => !isParallel)) {
+        glowGoldPath(newestTrail.points, FALLEN_GLOW_REST_ALPHA * afterglow, 18);
+      }
+      const retrace = Math.min(1, (nowMs - newestTrail.retraceStartedMs) / COMMIT_RETRACE_MS);
+      if (retrace < 1) glowGoldPath([...newestTrail.points].reverse(), 0.08 * (1 - retrace), 10, retrace);
     }
 
-    // なぞり中の仮配置（温かい白。110ms で立ち上がる）
-    if (stroke && stroke.dominoes.length > 0) {
-      for (const domino of stroke.dominoes) {
-        const appear = Math.min(1, (nowMs - domino.bornAtMs) / TILE_FADE_IN_MS);
-        drawDomino(domino, PALETTE_TILE, 0.92 * appear, null);
+    ctx.save();
+    const vignetteRadius = Math.hypot(p.width, p.height) * 0.56;
+    const vignette = ctx.createRadialGradient(p.width / 2, p.height / 2, Math.min(p.width, p.height) * 0.18, p.width / 2, p.height / 2, vignetteRadius);
+    vignette.addColorStop(0, "rgba(17, 19, 24, 0)");
+    vignette.addColorStop(0.72, "rgba(17, 19, 24, 0.12)");
+    vignette.addColorStop(1, "rgba(17, 19, 24, 0.68)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, p.width, p.height);
+    ctx.restore();
+
+    const introVisibility = introFadeStartedMs === null ? 1 : Math.max(0, 1 - (nowMs - introFadeStartedMs) / INTRO_FADE_MS);
+    if (introVisibility > 0) {
+      for (const light of sleepingLights) {
+        const wave = 0.7 + 0.3 * Math.sin((nowMs / light.periodMs) * Math.PI * 2 + light.phase);
+        const awakened = light.awakenedAtMs !== null && nowMs - light.awakenedAtMs < 500 ? 1 : 0;
+        const x = light.nx * p.width;
+        const y = light.ny * p.height;
+        ctx.save();
+        ctx.fillStyle = PALETTE_GOLD;
+        ctx.globalAlpha = introVisibility * Math.min(0.9, 0.5 + 0.35 * wave + 0.2 * awakened);
+        ctx.beginPath();
+        ctx.arc(x, y, light.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = introVisibility * SLEEPING_GLOW_ALPHA;
+        ctx.beginPath();
+        ctx.arc(x, y, light.radius * 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
     }
 
-    // aligned / chain の列
+    const mobile = p.width <= 430;
+    const tileWidth = mobile ? MOBILE_TILE_WIDTH_PX : TILE_WIDTH_PX;
+    const portrait = p.height > p.width ? PORTRAIT_SCALE : 1;
+    const tileDepth = (mobile ? MOBILE_TILE_DEPTH_PX : TILE_DEPTH_PX) * portrait;
+    const fallenLength = (mobile ? MOBILE_FALLEN_TILE_LENGTH_PX : FALLEN_TILE_LENGTH_PX) * portrait;
+    const hushStartMs = schedule ? schedule.hushAtMs : Number.POSITIVE_INFINITY;
+
+    const glowDomino = (domino: Domino, alpha: number, length: number): void => {
+      if (!glowCtx || !glowCanvas || alpha <= 0) return;
+      glowCtx.save();
+      glowCtx.globalCompositeOperation = "lighter";
+      glowCtx.globalAlpha = Math.min(0.12, alpha);
+      glowCtx.fillStyle = PALETTE_GOLD;
+      glowCtx.translate((domino.nx * p.width) / GLOW_CANVAS_DIVISOR, (domino.ny * p.height) / GLOW_CANVAS_DIVISOR);
+      glowCtx.rotate(Math.atan2(domino.ty, domino.tx));
+      glowCtx.fillRect(-length / GLOW_CANVAS_DIVISOR / 2, -5 / GLOW_CANVAS_DIVISOR, length / GLOW_CANVAS_DIVISOR, 10 / GLOW_CANVAS_DIVISOR);
+      glowCtx.restore();
+    };
+
+    const drawDomino = (domino: Domino, color: string, alpha: number, fallMsOffset: number | null, preview = false, emphasis = 0): void => {
+      const x = domino.nx * p.width;
+      const y = domino.ny * p.height;
+      const progress = fallMsOffset === null ? (color === PALETTE_GOLD ? 1 : 0) : fallProgress(fallMsOffset, FALL_MS);
+      const length = tileWidth + (fallenLength - tileWidth) * progress;
+      const depth = Math.max(1.5, tileDepth * (1 - progress * 0.72));
+      const angle = Math.atan2(domino.ty, domino.tx) + Math.PI / 2;
+      const shadowX = 3 * (1 - progress);
+      const shadowY = 4 + 4 * progress;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      if (!preview) {
+        ctx.globalAlpha = alpha * SHADOW_ALPHA * (1 - progress * 0.7);
+        ctx.fillStyle = PALETTE_BACKGROUND;
+        ctx.fillRect(-length / 2 + shadowX, -depth / 2 + shadowY, length + 2, depth + 2);
+      }
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.fillRect(-length / 2 - emphasis, -depth / 2, length + emphasis * 2, depth);
+      if (!preview && progress < 0.6) {
+        ctx.globalAlpha = alpha * TILE_SIDE_BAND_ALPHA;
+        ctx.fillStyle = PALETTE_TILE;
+        ctx.fillRect(-length / 2, depth / 2, length, 2);
+        ctx.globalAlpha = alpha * TILE_OUTLINE_ALPHA;
+        ctx.strokeStyle = PALETTE_BACKGROUND;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(-length / 2, -depth / 2, length, depth);
+      }
+      if (!preview) {
+        ctx.globalAlpha = alpha * EDGE_REFLECTION_ALPHA;
+        ctx.strokeStyle = PALETTE_TILE;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-length / 2, -depth / 2);
+        ctx.lineTo(-length / 2, depth / 2);
+        ctx.moveTo(length / 2, -depth / 2);
+        ctx.lineTo(length / 2, depth / 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (color === PALETTE_GOLD) {
+        const rest = progress >= 1 ? FALLEN_GLOW_REST_ALPHA : FALLEN_GLOW_ALPHA;
+        glowDomino(domino, rest, length + 8);
+      }
+    };
+
+    if (introTiles.length > 0 && introVisibility > 0) {
+      for (const domino of introTiles) drawDomino(domino, PALETTE_TILE, introVisibility * 0.42, null);
+    } else if (introVisibility <= 0) {
+      introTiles = [];
+    }
+
+    traceEchoes = traceEchoes.filter((echo) => nowMs - echo.bornAtMs < TRACING_ECHO_MS);
+    for (const echo of traceEchoes) {
+      const life = 1 - (nowMs - echo.bornAtMs) / TRACING_ECHO_MS;
+      ctx.save();
+      ctx.globalAlpha = TRACING_ECHO_ALPHA * life;
+      ctx.fillStyle = PALETTE_TILE;
+      ctx.beginPath();
+      ctx.arc(echo.x, echo.y, TRACING_ECHO_RADIUS_PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (stroke && stroke.dominoes.length > 0) {
+      const previewDominoes = stroke.dominoes;
+      const headStart = Math.max(0, previewDominoes.length - 3);
+      previewDominoes.forEach((domino, index) => {
+        const head = index >= headStart ? (index - headStart + 1) / Math.max(1, previewDominoes.length - headStart) : 0;
+        const alpha = TRACING_TILE_ALPHA + (TRACING_TILE_HEAD_ALPHA - TRACING_TILE_ALPHA) * head;
+        drawDomino(domino, PALETTE_TILE, alpha, null, true);
+      });
+    }
+
     if (settled) {
-      const blink = 0.5 + 0.5 * Math.sin((nowMs / 1000) * ENDPOINT_BLINK_HZ * Math.PI * 2);
       const dominoes = settled.dominoes;
-      const goldThrough = settled.goldThrough;
       for (let index = 0; index < dominoes.length; index++) {
         const domino = dominoes[index];
         let color = PALETTE_TILE;
-        let alpha = 0.95;
+        let alpha = schedule ? 0.9 + 0.1 * chainProgress : 0.95;
         let fallOffset: number | null = null;
-        if (goldThrough >= 0 && schedule) {
-          // 連鎖中: goldThrough は「倒れ始めた板の最大 index（連鎖順）」
-          const orderIndex = chainDirectionFromEnd ? dominoes.length - 1 - index : index;
-          if (orderIndex <= goldThrough) {
-            const fallStart = schedule.fallAtMs[orderIndex] ?? nowMs;
-            const sinceFall = nowMs - fallStart;
-            const isLast = orderIndex === schedule.fallAtMs.length - 1;
-            if (isLast) {
-              // 最後の 1 枚: finale（着地）で金へ開く。hush の間は白のまま倒れる
-              if (nowMs < schedule.finaleAtMs) {
-                fallOffset = Math.max(0, sinceFall);
-                color = PALETTE_TILE;
-              } else {
-                color = PALETTE_GOLD;
-              }
-            } else if (sinceFall < FALL_MS) {
-              // 倒れ始めは白、途中から金へ切り替わる
-              fallOffset = sinceFall;
-              color = sinceFall < FALL_MS * 0.4 ? PALETTE_TILE : PALETTE_GOLD;
-            } else {
-              color = PALETTE_GOLD;
+        const orderIndex = chainDirectionFromEnd ? dominoes.length - 1 - index : index;
+        if (schedule && orderIndex <= settled.goldThrough) {
+          const sinceFall = nowMs - (schedule.fallAtMs[orderIndex] ?? nowMs);
+          fallOffset = Math.max(0, Math.min(FALL_MS, sinceFall));
+          color = sinceFall >= FALL_MS * (2 / 3) ? PALETTE_GOLD : PALETTE_TILE;
+          if (sinceFall >= FALL_MS) fallOffset = null;
+          if (nowMs >= hushStartMs && nowMs < schedule.finaleAtMs) alpha *= HUSH_GLOW_DIM;
+        }
+        let emphasis = 0;
+        if (state === "aligned") {
+          const count = mobile ? MOBILE_ENDPOINT_BLINK_TILES : ENDPOINT_BLINK_TILES;
+          const endpointDistance = Math.min(index, dominoes.length - 1 - index);
+          if (endpointDistance < count) {
+            const phase = (nowMs - endpointDistance * ENDPOINT_BLINK_PHASE_STAGGER_MS) / 1000;
+            const blink = 0.5 + 0.5 * Math.sin(phase * ENDPOINT_BLINK_HZ_ALIGNED * Math.PI * 2);
+            alpha = 0.85 + 0.15 * blink;
+            emphasis = blink;
+            if (endpointFlashAtMs && nowMs >= endpointFlashAtMs.start && nowMs < endpointFlashAtMs.end) {
+              alpha = 1;
+              emphasis += 1;
             }
           }
-          // hush の間は道の光量を少し引く（最後の板の直前の静けさ）
-          if (nowMs >= hushStartMs && nowMs < schedule.finaleAtMs) {
-            alpha *= HUSH_GLOW_DIM;
-          }
         }
-        drawDomino(domino, color, alpha, fallOffset);
-        if (color === PALETTE_TILE && alpha > 0.5) glowTile(domino, GLOW_TILE_ALPHA * glowPulse, 1);
+        drawDomino(domino, color, alpha, fallOffset, false, emphasis);
       }
-      // 端の明滅（aligned のみ。chain 中は先頭が金に変わるので不要）
-      if (state === "aligned") {
-        const endpoints = endpointPositions(settled, p.width, p.height);
-        const flashBoost = endpointFlashAtMs && nowMs >= endpointFlashAtMs.start && nowMs < endpointFlashAtMs.end ? 0.8 : 0;
-        if (endpoints) {
-          for (const point of [endpoints.start, endpoints.end]) {
-            ctx.save();
-            ctx.globalCompositeOperation = "source-over";
-            ctx.globalAlpha = 0.25 + 0.55 * blink + flashBoost;
-            ctx.fillStyle = PALETTE_TILE;
-            ctx.beginPath();
-            ctx.arc(point.x, point.y, tileLen * 0.42, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
-          }
-        }
-        if (endpointFlashAtMs && nowMs >= endpointFlashAtMs.end) endpointFlashAtMs = null;
-      }
+      if (endpointFlashAtMs && nowMs >= endpointFlashAtMs.end) endpointFlashAtMs = null;
     }
 
-    // ---- 4. 終演の周辺光・衝撃波・スパークル ----
-    if (finaleActive && settled && normalizedStrokePoints) {
-      const glowElapsed = nowMs - (finaleAtMs ?? nowMs);
-      const rise = Math.min(1, glowElapsed / FINALE_GLOW_MS);
-      glowGoldPath(normalizedStrokePoints, GLOW_FINALE_ALPHA * rise * glowPulse);
+    pulses = pulses.filter((pulse) => nowMs - pulse.bornAtMs < FALL_MS);
+    for (const pulse of pulses) {
+      const progress = Math.min(1, (nowMs - pulse.bornAtMs) / FALL_MS);
+      const startRadius = mobile ? MOBILE_PULSE_START_RADIUS_PX : PULSE_START_RADIUS_PX;
+      const endRadius = mobile ? MOBILE_PULSE_END_RADIUS_PX : PULSE_END_RADIUS_PX;
+      ctx.save();
+      ctx.globalAlpha = 0.1 * (1 - progress);
+      ctx.fillStyle = PALETTE_GOLD;
+      ctx.beginPath();
+      ctx.arc(pulse.x, pulse.y, startRadius + (endRadius - startRadius) * progress, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
-    if (finaleActive && finaleAtMs !== null) {
-      const sinceFinale = nowMs - finaleAtMs;
-      // 衝撃波（細い輪を 1 回だけ）
-      sparks = sparks.filter((spark) => nowMs - spark.bornAtMs < spark.lifeMs);
-      for (const shock of shockwaves) {
-        const progress = (nowMs - shock.bornAtMs) / SHOCKWAVE_MS;
-        if (progress < 0 || progress > 1) continue;
+
+    if (finaleAtMs !== null && settled && normalizedStrokePoints) {
+      const elapsed = nowMs - finaleAtMs - FINALE_BLOOM_DELAY_MS;
+      if (elapsed >= 0 && elapsed <= FINALE_BLOOM_MS) {
+        const bloom = Math.min(1, elapsed / FINALE_BLOOM_MS);
+        glowGoldPath(
+          normalizedStrokePoints,
+          FINALE_BLOOM_GLOW_ALPHA * (0.65 + 0.35 * GLOW_PULSE_AMPLITUDE * lastAmp),
+          FINALE_BLOOM_GLOW_WIDTH_PX,
+          bloom,
+        );
+        const visibleCount = Math.max(2, Math.ceil(normalizedStrokePoints.length * bloom));
         ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = (1 - progress) * 0.5;
-        ctx.strokeStyle = PALETTE_TILE;
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = PALETTE_GOLD;
+        ctx.globalAlpha = 0.92;
+        ctx.lineWidth = FINALE_BLOOM_CORE_WIDTH_PX;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
         ctx.beginPath();
-        ctx.arc(shock.x, shock.y, 20 + 160 * (1 - Math.pow(1 - progress, 3)), 0, Math.PI * 2);
+        normalizedStrokePoints.slice(0, visibleCount).forEach((point, index) => {
+          const x = point.x * p.width;
+          const y = point.y * p.height;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
         ctx.stroke();
         ctx.restore();
       }
-      shockwaves = shockwaves.filter((shock) => nowMs - shock.bornAtMs < SHOCKWAVE_MS);
-      if (sinceFinale < 2000) {
-        // スパークル（画質段で上限が変わる。2D context へ直接）
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        for (const spark of sparks) {
-          const age = (nowMs - spark.bornAtMs) / spark.lifeMs;
-          const x = spark.x + spark.vx * (sinceFinale / 1000);
-          const y = spark.y + spark.vy * (sinceFinale / 1000);
-          ctx.globalAlpha = (1 - age) * 0.7;
-          ctx.fillStyle = PALETTE_GOLD;
-          ctx.fillRect(x, y, 1.6, 1.6);
-        }
-        ctx.restore();
-      }
     }
 
-    // ---- glow canvas の合成は CSS（mix-blend-mode: screen）で行う ----
+    for (const shock of shockwaves) {
+      const progress = (nowMs - shock.bornAtMs) / SHOCKWAVE_MS;
+      if (progress < 0 || progress > 1) continue;
+      ctx.save();
+      ctx.globalAlpha = FINALE_SHOCKWAVE_ALPHA * (1 - progress);
+      ctx.strokeStyle = PALETTE_GOLD;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(shock.x, shock.y, Math.min(p.width, p.height) * FINALE_SHOCKWAVE_RADIUS_RATIO * progress, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    shockwaves = shockwaves.filter((shock) => nowMs - shock.bornAtMs < SHOCKWAVE_MS);
 
-    // ---- 5. 導入 UI は DOM（#gate）。?debug 診断 ----
+    if (state === "aligned" || (state === "finale" && !settled && !schedule)) {
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = PALETTE_TILE;
+      ctx.font = "13px Helvetica Neue, Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(state === "aligned" ? "押す" : "重ねる", p.width / 2, p.height - Math.max(24, IGNORE_BAND_BOTTOM_PX / 2));
+      ctx.restore();
+    }
+
     frameCounter.record(performance.now() - drawStartMs);
     if (isDebugMode && p.frameCount % 6 === 0) renderDebugOverlay();
   };
