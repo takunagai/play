@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.DS_Store
+.superset/
+.verify/
+*.log
+
+# 別セッション実行用の指示書（Vault にアーカイブする。コミットしない）
+handover/
