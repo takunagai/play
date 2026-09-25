@@ -10,7 +10,7 @@ import "./style.css";
 import { fallProgress } from "./chain";
 import { createFrameCounter, installArtHook } from "./art-hook";
 import { buildDominoes, pathLength, resampleByArcLength, smoothPoints, type Domino, type Vec2 } from "./path";
-import { pitchForProgress } from "./music";
+import { pitchForChainIndex } from "./music";
 import { QualityController } from "./quality";
 import type { ChainEvent, ChainSchedule } from "./audio/engine";
 import { createAudioEngine } from "./audio/engine";
@@ -18,6 +18,7 @@ import {
   DOMINO_SPACING_MAX_PX,
   DOMINO_SPACING_MIN_PX,
   DOMINO_SPACING_RATIO,
+  DRAG_START_DISTANCE_PX,
   ENDPOINT_BLINK_HZ,
   ENDPOINT_FLASH_MS,
   ENDPOINT_HIT_MIN_PX,
@@ -92,6 +93,13 @@ interface Shockwave {
   bornAtMs: number;
 }
 
+/** aligned の端以外を押した後、ドラッグ開始距離を超えるまで保持する入力 */
+interface PendingReplacement {
+  pointerId: number;
+  x: number;
+  y: number;
+}
+
 interface CommittedTrail {
   /** 画面正規化座標の点列 */
   points: Vec2[];
@@ -127,6 +135,7 @@ let trails: CommittedTrail[] = [];
 let introTiles: Domino[] = []; // 導入画面の休止中の板
 let introFadeStartedMs: number | null = null;
 let endpointFlashAtMs: { start: number; end: number } | null = null;
+let pendingReplacement: PendingReplacement | null = null;
 
 // リサイズで再構築するため正規化座標を保持する
 let normalizedStrokePoints: Vec2[] | null = null;
@@ -314,12 +323,12 @@ new P5((p: P5) => {
   };
 
   /** ポインタの現在位置をなぞりに記録する（間引き + 仮配置の更新） */
-  const recordPointer = (x: number, y: number): void => {
+  const recordPointer = (x: number, y: number, force = false): void => {
     if (!stroke) return;
     const nowMs = performance.now();
     const last = stroke.rawPoints[stroke.rawPoints.length - 1];
     if (last && Math.hypot(x - last.x, y - last.y) < RAW_POINT_MIN_DISTANCE_PX) return;
-    if (nowMs - stroke.lastRecordedAtMs < RAW_POINT_MIN_INTERVAL_MS) return;
+    if (!force && nowMs - stroke.lastRecordedAtMs < RAW_POINT_MIN_INTERVAL_MS) return;
     stroke.lastRecordedAtMs = nowMs;
     stroke.rawPoints.push({ x, y });
     const before = stroke.dominoes.length;
@@ -378,8 +387,8 @@ new P5((p: P5) => {
     chainDirectionFromEnd = distEnd <= distStart;
 
     const ordered = chainDirectionFromEnd ? [...settled.dominoes].reverse() : settled.dominoes;
-    chainEvents = ordered.map((domino) => {
-      const pitch = pitchForProgress(domino.progress);
+    chainEvents = ordered.map((domino, index) => {
+      const pitch = pitchForChainIndex(index, ordered.length);
       return { x: domino.nx, y: domino.ny, midi: pitch.midi, velocity: 0.85 };
     });
     schedule = audio.beginChain(chainEvents);
@@ -465,10 +474,11 @@ new P5((p: P5) => {
           const distStart = Math.hypot(x - endpoints.start.x, y - endpoints.start.y);
           const distEnd = Math.hypot(x - endpoints.end.x, y - endpoints.end.y);
           if (distStart <= hit || distEnd <= hit) {
+            pendingReplacement = null;
             beginChainFrom(x, y);
           } else {
-            // 誤タップ: 列は消さず、最寄りの端を一度だけ明るくする
-            endpointFlashAtMs = { start: performance.now(), end: performance.now() + ENDPOINT_FLASH_MS };
+            // 単なる誤タップとドラッグ置換を、移動距離が確定するまで区別しない
+            pendingReplacement = { pointerId: event.pointerId, x, y };
           }
           return;
         }
@@ -484,24 +494,38 @@ new P5((p: P5) => {
     window.addEventListener(
       "pointermove",
       (event: PointerEvent) => {
-        if (!event.isPrimary || state !== "tracing" || !stroke) return;
-        // aligned で端以外を押して動いた場合は pointerdown 側で新しい列を開始する設計のため、
-        // ここでは tracing 中の記録だけを見る
+        if (!event.isPrimary) return;
+        if (state === "aligned" && settled && pendingReplacement?.pointerId === event.pointerId) {
+          const distance = Math.hypot(event.clientX - pendingReplacement.x, event.clientY - pendingReplacement.y);
+          if (distance < DRAG_START_DISTANCE_PX) return;
+          const start = { x: pendingReplacement.x, y: pendingReplacement.y };
+          pendingReplacement = null;
+          endpointFlashAtMs = null;
+          settled = null;
+          beginTrace(start.x, start.y);
+          recordPointer(event.clientX, event.clientY, true);
+          return;
+        }
+        if (state !== "tracing" || !stroke) return;
         recordPointer(event.clientX, event.clientY);
       },
       { passive: true },
     );
 
-    const releasePointer = (event: PointerEvent): void => {
+    const releasePointer = (event: PointerEvent, flashMisTap: boolean): void => {
       if (!event.isPrimary) return;
-      if (state === "tracing" && stroke) {
-        // aligned からのドラッグ再開（aligned で端以外を押した場合）は
-        // 誤タップ扱いで列を残す設計のため、ここでは tracing のみ扱う
-        finishTrace();
+      if (state === "aligned" && pendingReplacement?.pointerId === event.pointerId) {
+        pendingReplacement = null;
+        if (flashMisTap) {
+          const nowMs = performance.now();
+          endpointFlashAtMs = { start: nowMs, end: nowMs + ENDPOINT_FLASH_MS };
+        }
+        return;
       }
+      if (state === "tracing" && stroke) finishTrace();
     };
-    window.addEventListener("pointerup", releasePointer, { passive: true });
-    window.addEventListener("pointercancel", releasePointer, { passive: true });
+    window.addEventListener("pointerup", (event) => releasePointer(event, true), { passive: true });
+    window.addEventListener("pointercancel", (event) => releasePointer(event, false), { passive: true });
 
     window.addEventListener("dragstart", (event) => event.preventDefault());
   };

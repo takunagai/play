@@ -3,7 +3,7 @@
 // work.json の scale「メジャーペンタ」と対応。正本は docs/architecture.md 第 6 節。
 // ============================================================
 
-import { SCALES, type ScaleName } from "./scale";
+import { scaleMidiRange, SCALES, type ScaleName } from "./scale";
 
 export const SCALE: ScaleName = "メジャーペンタ";
 /** C メジャーペンタのステップ（半音） */
@@ -12,6 +12,8 @@ export const SCALE_STEPS: readonly number[] = SCALES[SCALE];
 export const BASE_MIDI = 60;
 /** 単音の上限（E6） */
 export const TOP_MIDI = 88;
+/** 連鎖音に使える C メジャーペンタの MIDI（C4〜E6） */
+export const PITCH_MIDIS: readonly number[] = scaleMidiRange(SCALE, BASE_MIDI, TOP_MIDI);
 /** 終演和音（C4 / E4 / G4 / A4） */
 export const FINALE_CHORD_MIDIS: readonly number[] = [60, 64, 67, 69];
 /** 終演の低音（C2 / C3） */
@@ -26,10 +28,11 @@ export function midiToFrequency(midi: number): number {
  * 同じ段が数枚続いてもよいが、逆行しないことを優先する。
  */
 export function pitchForProgress(progress: number): { midi: number; degree: number } {
-  const steps = SCALE_STEPS.length;
-  const total = TOP_MIDI - BASE_MIDI; // 28 半音 ≒ 5 オクターブ弱
-  const index = Math.round(Math.min(1, Math.max(0, progress)) * total);
-  const degree = index % steps;
-  const midi = BASE_MIDI + index;
-  return { midi, degree };
+  const index = Math.round(Math.min(1, Math.max(0, progress)) * (PITCH_MIDIS.length - 1));
+  return { midi: PITCH_MIDIS[index], degree: index };
+}
+
+/** タップした端を 0 とする連鎖順から、常に上昇する音程を返す。 */
+export function pitchForChainIndex(index: number, count: number): { midi: number; degree: number } {
+  return pitchForProgress(count <= 1 ? 0 : index / (count - 1));
 }

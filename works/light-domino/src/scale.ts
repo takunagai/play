@@ -13,3 +13,17 @@ export const SCALES = {
 } as const;
 
 export type ScaleName = keyof typeof SCALES;
+
+/** 指定した音階の degree を、baseMidi から topMidi まで MIDI 昇順で列挙する。 */
+export function scaleMidiRange(scale: ScaleName, baseMidi: number, topMidi: number): number[] {
+  if (topMidi < baseMidi) return [];
+  const steps: readonly number[] = SCALES[scale];
+  const midis: number[] = [];
+  for (let octave = 0; baseMidi + octave * 12 <= topMidi; octave++) {
+    for (const step of steps) {
+      const midi = baseMidi + octave * 12 + step;
+      if (midi <= topMidi) midis.push(midi);
+    }
+  }
+  return midis;
+}
