@@ -2,6 +2,8 @@
 // quality.ts ─ 画質の自動調整（段を下げるだけの単純版）
 // フレーム間隔の中央値が遅く、かつ変動が大きいときだけ負荷とみなして 1 段下げる。
 // 変動が小さい遅さは rAF の制限（省エネモードの 30Hz 等）で負荷ではないので下げない。
+// 画質段は終演スパークルの上限（tuning.ts の PARTICLE_CAP_STEPS）にだけ効く。
+// 板数・連鎖時間・光跡の形は画質で変えない（docs/architecture.md 第 7.3 節）。
 // ============================================================
 
 import {
@@ -35,7 +37,7 @@ export function isOverloadedWindow(frameIntervalsMs: readonly number[]): boolean
 }
 
 export class QualityController {
-  /** 0 = 最高。段の数は呼び出し側の配列（例: RIPPLE_CAP_STEPS）の長さ */
+  /** 0 = 最高。段の数は呼び出し側の配列（例: PARTICLE_CAP_STEPS）の長さ */
   private level = 0;
   private elapsedMs = 0;
   private windowElapsedMs = 0;

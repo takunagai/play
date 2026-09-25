@@ -11,11 +11,22 @@
 
 ## Phase 1: 実装
 
-未着手。次の実装カードで `docs/architecture.md` を正本として雛形を書き換える。
+- `docs/architecture.md` を正本に、雛形（波紋作品）から全面書き換えた。状態機械は `intro / tracing / aligned / chain / finale`
+- モジュール: `main.ts`（状態機械・入力・描画）/ `tuning.ts`（定数一元）/ `music.ts` + `scale.ts`（C メジャーペンタ、進行率 → C4〜E6 の単調上昇）/ `path.ts`（移動平均・弧長再サンプリング・板配置の純粋関数）/ `chain.ts`（連鎖タイムラインの純粋計算）/ `audio/engine.ts`（契約 + Noop + `computeChainSchedule`）/ `audio/synth-engine.ts`（マリンバ風モーダル合成）/ `audio/audio-tuning.ts`（音響の定数）/ `quality.ts` / `art-hook.ts`（雛形のまま）
+- 連鎖の時刻は音側の `beginChain()` が `ChainSchedule` で返し、視覚はその時刻で倒れを描く。Noop（`?mute`・未解錠）も同じ純粋計算を使うため、無音時も連鎖の速さが変わらない
+- hush は「最後の板の着地の 160ms 前 → 着地」。transientBus を 80ms で -12dB に下げ、着地で 180ms かけて戻す。最後の板だけは白のまま倒れ、着地と同時に金へ開く
+- グローは縮小キャンバス（1/6）を別 DOM レイヤーに置き、CSS の `mix-blend-mode: screen` + `blur(6px)` で合成。本体キャンバスへの加算は避けた（白飽和対策）
+- 確定光跡は trail canvas（p5 キャンバスの下の DOM レイヤー）に不透明な金で焼き付け、最大 24 本。上限超過時だけ最古の 1 本を 1500ms でフェードする
+- `place()` の発音は 84ms に間引くが、板の視覚配置は間引かない
 
 ## Phase 2: 検証（pnpm verify）
 
-未着手。構想カードでは `pnpm check` のみ実施する。
+- `pnpm verify light-domino`: 全項目 pass。maxAmp 1280=0.0067 / 375=0.0071、meanDrawMs 1280=0.59 / 375=0.26
+- 追加の実測プローブ（ヘッドレスの一時スクリプト。コミットしない）:
+  - S 字カーブをなぞって端をタップすると、state が `aligned → chain → finale` まで進み、光跡が金色の連続した曲線として残る（x 方向の複数の桶にわたり y が滑らかに変化する金色画素を確認）
+  - 375px 幅 + CDP タッチでも同じ操作が成立（finale 到達、maxAmp 0.148）
+  - amp 推移: 連鎖中の加速に従って amp が上がり（0.018 → 0.13）、hush の 160ms で落ちて、finale で 0.098 → ピーク 0.153 の和音
+  - 連鎖時間: 19 枚の列で約 6.7 秒（1.4〜9 秒の範囲内）。375px では約 8.2 秒
 
 ## Phase 3: 公開
 
