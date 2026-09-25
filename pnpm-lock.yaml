@@ -12,6 +12,8 @@ importers:
         specifier: ^0.35.4
         version: 0.35.4
 
+  gallery: {}
+
   works/heartburst:
     dependencies:
       '@strudel/web':

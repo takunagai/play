@@ -1,0 +1,7 @@
+{
+  "name": "gallery",
+  "private": true,
+  "type": "module",
+  "description": "作品一覧ページ。ビルドはルートの scripts/build.mjs が render.mjs を呼んで行う",
+  "exports": "./render.mjs"
+}
