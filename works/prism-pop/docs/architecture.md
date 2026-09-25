@@ -13,7 +13,7 @@
 ## 2. モジュール構成
 
 ```
-web/
+works/prism-pop/
   index.html / src/style.css      レイヤー: #bg(2D) / #gl(WebGL) / p5 canvas / #glow / UI
   src/
     main.ts        入力・ゲーム状態・コンボ・描画ループ（p5 インスタンスモード）・品質切替の配線
@@ -103,7 +103,7 @@ energy（0..1）: pop ごとに +ENERGY_PER_POP、毎秒 ENERGY_DECAY で減衰�
 | setEnergy | energy 0..1（毎フレーム） | 背景ブロブの明るさ・色相（バイオレット→明るい紫＋ライムの光）が追従 | パッド（主音 + 5 度）の音量・フィルタが追従。energy 0 で無音 |
 | （毎フレーム 1 回） | getAmp() 0..1 | グロー層の明るさ脈動、泡の膜のきらめき量 | ─（音→視覚の逆流線はこの 1 本のみ） |
 
-## 5. AudioEngine 契約（`web/src/audio/engine.ts` が正本の写し）
+## 5. AudioEngine 契約（`src/audio/engine.ts` が正本の写し）
 
 ```ts
 export type PopKind = "tap" | "swipe" | "chain";
@@ -195,7 +195,7 @@ export interface AudioEngine {
 
 泡の奥を、半透明で幻想的な海の生き物がゆっくり漂う。空間に奥行きと「何かが棲んでいる」気配を足すための背景要素で、**操作の対象にしない**（当たり判定なし・入力に反応しない）。
 
-- 素材: gpt-image-2 で生成した透過 PNG を 768px の WebP にした 6 枚（`web/public/creatures/`）。体そのものが半透明（不透明ピクセル 0%）
+- 素材: gpt-image-2 で生成した透過 PNG を 768px の WebP にした 6 枚（`public/creatures/`）。体そのものが半透明（不透明ピクセル 0%）
 - 種類ごとに 1 体、計 6 体。不透明度は全種共通 25%（`CREATURE_OPACITY`）、通常合成（source-over）
 - 大きさ（画像 1 辺）= 基準長 × 種類ごとの比率。基準長 = `min(画面幅, 画面高さ × 16/9)`（16:9 以上の横長では画面幅、縦長画面では画面幅、超横長では高さ側で頭打ち）
 - 縦長画面（幅 < 高さ。スマホの縦持ち）では基準長を 2 倍にする（`CREATURE_PORTRAIT_SCALE`）。画面幅基準のままだとスマホで小さすぎるため
@@ -238,8 +238,8 @@ standard 内でもしぶき粒子の上限を fps で自動調整する（1200 �
 
 ## 9. ディレクトリ・定数
 
-- 視覚・操作・品質の定数: `web/src/tuning.ts` の冒頭に集約
-- 音響の定数: `web/src/audio/audio-tuning.ts` に集約
-- 音階・和声音・度数色: `web/src/music.ts`
+- 視覚・操作・品質の定数: `src/tuning.ts` の冒頭に集約
+- 音響の定数: `src/audio/audio-tuning.ts` に集約
+- 音階・和声音・度数色: `src/music.ts`
 - README にノブ一覧表（定数名・意味・既定値・体感への効き方）を置く
 - 開発用クエリ: `?mute`（無音）、`?quality=standard|rich`（画質固定）、`?debug`（画面に診断: fps・画質段・音声状態・`isSecureContext`・直近のエラー）

@@ -29,14 +29,15 @@
 
 ### 動かし方
 
-必要なもの: Node.js 26（`web/.node-version`）、pnpm
+作品集 [play](../../README.md) の 1 作品。必要なもの: Node.js 26（リポジトリ直下の `.node-version`）、pnpm
 
 ```bash
-git clone https://github.com/takunagai/prism-pop.git
-cd prism-pop/web
+git clone https://github.com/takunagai/play.git
+cd play
 pnpm install
+cd works/prism-pop
 pnpm dev       # 開発サーバー
-pnpm build     # 型チェック → 本番ビルド（web/dist/）
+pnpm build     # 型チェック → 本番ビルド（dist/）
 pnpm preview   # ビルド結果の確認
 ```
 
@@ -62,8 +63,8 @@ pnpm preview   # ビルド結果の確認
 | [docs/concept.md](docs/concept.md) | コンセプトシート（感情ゴール・操作・ビジュアル・音） |
 | [docs/architecture.md](docs/architecture.md) | 設計の正本（モジュール構成・状態・音視覚マッピング・画質判定） |
 | [docs/process-log.md](docs/process-log.md) | 制作記録（設計判断と見つけた不具合） |
-| [web/README.md](web/README.md) | 視覚・操作・画質の調整ノブ一覧 |
-| [web/src/audio/README-audio.md](web/src/audio/README-audio.md) | 音響の調整ノブ一覧 |
+| [docs/tuning.md](docs/tuning.md) | 視覚・操作・画質の調整ノブ一覧 |
+| [src/audio/README-audio.md](src/audio/README-audio.md) | 音響の調整ノブ一覧 |
 
 ### ライセンス
 
@@ -94,14 +95,15 @@ Sound starts on the first tap (browser autoplay policy).
 
 ### Getting started
 
-Requirements: Node.js 26 (`web/.node-version`), pnpm
+Part of the [play](../../README.md) collection. Requirements: Node.js 26 (`.node-version` at the repository root), pnpm
 
 ```bash
-git clone https://github.com/takunagai/prism-pop.git
-cd prism-pop/web
+git clone https://github.com/takunagai/play.git
+cd play
 pnpm install
+cd works/prism-pop
 pnpm dev       # dev server
-pnpm build     # type check, then production build (web/dist/)
+pnpm build     # type check, then production build (dist/)
 pnpm preview   # preview the build
 ```
 
@@ -122,7 +124,7 @@ Dev query parameters:
 
 ### Documentation
 
-The design notes in `docs/` and the tuning tables in `web/README.md` are written in Japanese.
+The design notes in `docs/` and the tuning tables in `docs/tuning.md` are written in Japanese.
 
 ### License
 

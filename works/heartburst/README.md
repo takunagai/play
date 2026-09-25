@@ -18,8 +18,8 @@
 ## 起動
 
 ```bash
-./bin/start.sh            # フル起動（SC → Tidal → Processing）
-./bin/start.sh --no-tidal # Tier 1（SC + Processing のみ）
+./native/bin/start.sh            # フル起動（SC → Tidal → Processing）
+./native/bin/start.sh --no-tidal # Tier 1（SC + Processing のみ）
 ```
 
 終了は Ctrl+C（全プロセスを後始末）。ログは `/tmp/heartburst/`。
@@ -34,12 +34,13 @@
 | 短クリック | 小破裂（連打向け） |
 | `d` キー | デバッグ HUD（fps / state / level） |
 
-## ウェブ版（web/）
+## ウェブ版（この作品フォルダ直下）
 
 ブラウザだけで動く版（p5.js + Web Audio + Strudel）。ネイティブ版の「溜めて解放」に、ゲーム性・楽器・物語を足している。
 
 ```bash
-cd web && pnpm install && pnpm dev
+# 作品集 play のルートで pnpm install した後
+cd works/heartburst && pnpm dev
 ```
 
 | 操作 | 反応 |
@@ -58,9 +59,9 @@ cd web && pnpm install && pnpm dev
 
 ### ライセンス（AGPLv3）
 
-ウェブ版（`web/`）は [AGPLv3](web/LICENSE) で公開している。音楽パターン層に使っている [Strudel](https://strudel.cc/) が AGPLv3 のためだ。AGPLv3 は、ネット越しに使わせるだけでも利用者にソースを提供する義務を課し、組み込む側のコードも同じライセンスにすることを求める。そこで本リポジトリをソースの提供先とし、作品の遊び方カードの末尾とコンソールにリンクを出している。ネイティブ版（`sc/`・`processing/`・`tidal/`）は Strudel を使っていない。
+この作品フォルダ（ウェブ版と `native/` のネイティブ版）は [AGPLv3](LICENSE) で公開している。音楽パターン層に使っている [Strudel](https://strudel.cc/) が AGPLv3 のためだ。AGPLv3 は、ネット越しに使わせるだけでも利用者にソースを提供する義務を課し、組み込む側のコードも同じライセンスにすることを求める。そこで作品集 play のリポジトリ（`works/heartburst/`）をソースの提供先とし、作品の遊び方カードの末尾とコンソールにリンクを出している。ネイティブ版（`native/sc/`・`native/processing/`・`native/tidal/`）は Strudel を使っていない。
 
-チューニング定数は `web/src/tuning.ts`（演出）、`web/src/music.ts`（音程・コード進行）、`web/src/scenes.ts`（場面）、`web/src/audio/heartburst-engine.ts` 冒頭（音響）。
+チューニング定数は `src/tuning.ts`（演出）、`src/music.ts`（音程・コード進行）、`src/scenes.ts`（場面）、`src/audio/heartburst-engine.ts` 冒頭（音響）。
 
 ## チューニング
 
@@ -68,11 +69,11 @@ cd web && pnpm install && pnpm dev
 
 | 対象 | 場所 |
 |---|---|
-| マスター音量・リバーブ | `sc/main.scd` 冒頭の `~masterVolume` / `~reverbMix` / `~reverbRoom` / `~reverbDamp`（ライブ調整は `~master.set(\amp, 0.8)` 等） |
-| シャワーの密度・長さ | `sc/main.scd` の `/release` OSCdef 内 `baseDensity`（level→3..14 notes/sec）と `total = 3.0` |
+| マスター音量・リバーブ | `native/sc/main.scd` 冒頭の `~masterVolume` / `~reverbMix` / `~reverbRoom` / `~reverbDamp`（ライブ調整は `~master.set(\amp, 0.8)` 等） |
+| シャワーの密度・長さ | `native/sc/main.scd` の `/release` OSCdef 内 `baseDensity`（level→3..14 notes/sec）と `total = 3.0` |
 | ワンショット音量 | `\dropBoom` / `\shockwave` の amp マッピング、`\shimmer` の amp 係数 |
-| 溜め/減衰テンポ・粒子数・演出強度 | `processing/Heartburst/Heartburst.pde` 冒頭の定数群（`CHARGE_DURATION_MS` / `DECAY_DURATION_MS` / `PARTICLE_COUNT` ほか） |
-| パターン層の音量・追従感度 | `tidal/performance.tidal` 各レイヤーの `gain` / `lpf` / `degradeBy` の係数 |
+| 溜め/減衰テンポ・粒子数・演出強度 | `native/processing/Heartburst/Heartburst.pde` 冒頭の定数群（`CHARGE_DURATION_MS` / `DECAY_DURATION_MS` / `PARTICLE_COUNT` ほか） |
+| パターン層の音量・追従感度 | `native/tidal/performance.tidal` 各レイヤーの `gain` / `lpf` / `degradeBy` の係数 |
 
 ## 依存セットアップ
 

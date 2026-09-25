@@ -1,6 +1,6 @@
-# Prism Pop ─ web
+# Prism Pop ─ 調整ノブ
 
-虹色の泡をタップ / なぞって割るインタラクティブアート。仕様の正本は `docs/architecture.md`（本ファイルはノブの早見表）。
+虹色の泡をタップ / なぞって割るインタラクティブアート。仕様の正本は `architecture.md`（本ファイルはノブの早見表）。
 
 ```bash
 pnpm install
@@ -8,7 +8,7 @@ pnpm dev      # 開発サーバー
 pnpm build    # tsc --noEmit → vite build
 ```
 
-デプロイ: `pnpm build` の後に `wrangler deploy`（Cloudflare Workers の静的アセット配信、設定は `wrangler.jsonc`）。公開 URL: https://prism-pop.nagai-shouten.workers.dev
+公開: 作品集 play の一部として https://play.nagai-shouten.com/works/prism-pop/ で配信（デプロイは play リポジトリの README を参照）
 
 開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）
 
@@ -108,4 +108,4 @@ pnpm build    # tsc --noEmit → vite build
 
 ## 音響のノブ
 
-音響側の定数は `src/audio/audio-tuning.ts`、主なノブの一覧表は [`src/audio/README-audio.md`](src/audio/README-audio.md) を参照。
+音響側の定数は `src/audio/audio-tuning.ts`、主なノブの一覧表は [`src/audio/README-audio.md`](../src/audio/README-audio.md) を参照。
