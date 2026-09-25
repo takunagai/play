@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>__TITLE__</title>
+    <meta name="description" content="__SUMMARY__" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="__TITLE__" />
+    <meta property="og:description" content="__SUMMARY__" />
+    <meta property="og:url" content="https://play.nagai-shouten.com/works/__SLUG__/" />
+    <meta property="og:image" content="https://play.nagai-shouten.com/works/__SLUG__/thumbnail.webp" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!-- favicon は data URI（外部ファイル・外部 CDN を使わない） -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%2307070d%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%227%22%20fill%3D%22%23b69cff%22%2F%3E%3C%2Fsvg%3E"
+    />
+  </head>
+  <body>
+    <div id="stage">
+      <div id="p5-host"></div>
+    </div>
+    <div id="gate">
+      <h1 id="gate-title">__TITLE__</h1>
+      <p id="gate-text">触れて、はじめる</p>
+    </div>
+    <pre id="debug-overlay" hidden></pre>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

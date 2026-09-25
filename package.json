@@ -4,9 +4,14 @@
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "scripts": {
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs",
+    "verify": "node scripts/verify-work.mjs",
+    "new-work": "node scripts/new-work.mjs",
+    "prepare-image": "node scripts/prepare-image.mjs"
   },
   "devDependencies": {
+    "playwright": "1.63.0",
     "sharp": "^0.35.4"
   }
 }

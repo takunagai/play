@@ -18,6 +18,8 @@ export const LICENSES = { dialogue: ["MIT", "AGPL-3.0"], autopilot: ["MIT"] };
 export const MAX_GENERATED_IMAGES = 10;
 export const MAX_SUMMARY_LENGTH = 80;
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** new-work.mjs が summary を省略されたときに入れる文。pnpm check はこれを未記入として弾く */
+export const SUMMARY_PLACEHOLDER = "（1 行説明を書く）";
 
 const REQUIRED_KEYS = [
   "slug",

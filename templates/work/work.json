@@ -1,0 +1,15 @@
+{
+  "slug": "__SLUG__",
+  "title": "__TITLE__",
+  "date": "__DATE__",
+  "origin": "autopilot",
+  "summary": "__SUMMARY__",
+  "emotion": "__EMOTION__",
+  "verb": "__VERB__",
+  "tone": "__TONE__",
+  "sound": "__SOUND__",
+  "scale": "__SCALE__",
+  "thumbnail": "thumbnail.webp",
+  "license": "MIT",
+  "generatedImages": []
+}
