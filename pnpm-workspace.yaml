@@ -1,3 +1,7 @@
 packages:
   - works/*
   - gallery
+
+# 作品ごとに lockfile を持つ（works/<slug>/pnpm-lock.yaml）。
+# 新作の PR がルートの lockfile を変えずに works/<slug>/ の中だけで閉じるようにするため
+sharedWorkspaceLockfile: false
