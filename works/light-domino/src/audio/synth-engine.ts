@@ -50,7 +50,8 @@ type WebkitWindow = Window & { webkitAudioContext?: typeof AudioContext };
 /** 進行中の 1 発。音を奪う（steal）ために管理する */
 interface ActiveVoice {
   gain: GainNode;
-  stopAtMs: number;
+  startsAtSeconds: number;
+  stopAtSeconds: number;
   isFinale: boolean;
 }
 
@@ -166,17 +167,17 @@ export class SynthAudioEngine implements AudioEngine {
   }
 
   beginChain(events: readonly ChainEvent[]): ChainSchedule {
-    const nowMs = performance.now();
-    const schedule = computeChainSchedule(events, nowMs);
     const context = this.context;
+    const nowMs = performance.now();
+    const audioNowSeconds = context?.currentTime ?? 0;
+    const schedule = computeChainSchedule(events, nowMs);
     if (!this.isWired || !context || !this.fxIn || events.length === 0) return schedule;
 
     // AudioContext が running のときだけ先行予約する。未解錠なら視覚だけ進む
     // （途中で解錠されても過去の時刻の音をまとめて鳴らさない）
     if (context.state !== "running") return schedule;
 
-    const origin = context.currentTime + schedule.fallAtMs[0] / 1000 - 0.001;
-    const ctxOf = (scheduleMs: number): number => origin + (scheduleMs - schedule.fallAtMs[0]) / 1000;
+    const ctxOf = (scheduleMs: number): number => audioNowSeconds + (scheduleMs - nowMs) / 1000;
 
     events.forEach((event, index) => {
       const isLast = index === events.length - 1;
@@ -199,53 +200,63 @@ export class SynthAudioEngine implements AudioEngine {
     // 終演: 低音 + 和音を finaleAtMs に揃える
     this.scheduleFinale(ctxOf(schedule.finaleAtMs), events[events.length - 1]);
     // 進行済みの音を後からまとめて鳴らさないため、hush 以降の grant はここまで
-    this.pruneVoices();
+    this.pruneVoices(context.currentTime);
     return schedule;
   }
 
   // ---- 音源 ----
 
-  private busyDuckLinear(): number {
-    const now = performance.now();
-    this.recentStarts = this.recentStarts.filter((time) => now - time < BUSY_WINDOW_MS);
-    const count = this.recentStarts.length;
+  private busyDuckLinear(atSeconds: number): number {
+    const windowSeconds = BUSY_WINDOW_MS / 1000;
+    this.recentStarts = this.recentStarts.filter((time) => atSeconds - time < windowSeconds);
+    const count = this.recentStarts.filter((time) => time <= atSeconds).length;
     if (count < BUSY_VOICE_THRESHOLD) return 1;
     const overflow = Math.min(1, (count - BUSY_VOICE_THRESHOLD + 1) / BUSY_VOICE_THRESHOLD);
-    return Math.pow(10, (-BUSY_DUCK_MAX_DB * overflow) / 20);
+    return Math.pow(10, (BUSY_DUCK_MAX_DB * overflow) / 20);
   }
 
-  private registerStart(): void {
-    this.recentStarts.push(performance.now());
+  private registerStart(atSeconds: number): void {
+    this.recentStarts.push(atSeconds);
   }
 
-  /** 同時発音上限。通常音は最古から奪い、終演音は奪わない */
-  private makeRoom(isFinale: boolean, context: AudioContext): void {
-    if (this.voices.length < MAX_VOICES) return;
-    if (isFinale) {
-      // 終演音は最古の通常音を 2 つ奪ってでも鳴らす
-      const stealable = this.voices.filter((voice) => !voice.isFinale).slice(0, 2);
-      for (const voice of stealable) this.fadeOutVoice(voice, context);
-      return;
+  /** 同時発音上限。対象時刻に鳴る最古の通常音を奪い、終演音は奪わない */
+  private makeRoom(atSeconds: number, context: AudioContext): boolean {
+    this.pruneVoices(atSeconds);
+    const overlapping = this.voices.filter(
+      (voice) => voice.startsAtSeconds <= atSeconds && voice.stopAtSeconds > atSeconds,
+    );
+    if (overlapping.length < MAX_VOICES) return true;
+
+    const required = overlapping.length - MAX_VOICES + 1;
+    const stealable = overlapping.filter((voice) => !voice.isFinale).slice(0, required);
+    if (stealable.length < required) return false;
+
+    for (const voice of stealable) {
+      this.fadeOutVoice(voice, atSeconds, context);
+      // 同じ voice を後続の予約でも繰り返し steal しないよう、管理対象から直ちに外す。
+      this.voices = this.voices.filter((entry) => entry !== voice);
     }
-    const oldest = this.voices.find((voice) => !voice.isFinale);
-    if (oldest) this.fadeOutVoice(oldest, context);
+    return true;
   }
 
-  private fadeOutVoice(voice: ActiveVoice, context: AudioContext): void {
-    const now = context.currentTime;
+  private fadeOutVoice(voice: ActiveVoice, atSeconds: number, context: AudioContext): void {
+    const fadeStart = Math.max(context.currentTime, atSeconds - STEAL_FADE_SECONDS);
     try {
-      voice.gain.gain.cancelScheduledValues(now);
-      voice.gain.gain.setValueAtTime(Math.max(voice.gain.gain.value, 0.0001), now);
-      voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + STEAL_FADE_SECONDS);
-      voice.stopAtMs = performance.now() + STEAL_FADE_SECONDS * 1000 + 50;
+      voice.gain.gain.cancelScheduledValues(fadeStart);
+      voice.gain.gain.setValueAtTime(Math.max(voice.gain.gain.value, 0.0001), fadeStart);
+      if (fadeStart < atSeconds) {
+        voice.gain.gain.exponentialRampToValueAtTime(0.0001, atSeconds);
+      } else {
+        voice.gain.gain.setValueAtTime(0.0001, atSeconds);
+      }
+      voice.stopAtSeconds = atSeconds;
     } catch {
       // 既に停止済みなら何もしない
     }
   }
 
-  private pruneVoices(): void {
-    const now = performance.now();
-    this.voices = this.voices.filter((voice) => voice.stopAtMs > now);
+  private pruneVoices(atSeconds: number): void {
+    this.voices = this.voices.filter((voice) => voice.stopAtSeconds > atSeconds);
   }
 
   /** 板を置く・吸着の木製クリック（サイン 1 音） */
@@ -303,14 +314,14 @@ export class SynthAudioEngine implements AudioEngine {
     const context = this.context;
     const bus = this.transientBus;
     if (!context || !bus) return;
-    this.makeRoom(false, context);
+    if (!this.makeRoom(atSeconds, context)) return;
     const frequency = midiToFrequency(event.midi);
     // 進行率で明るさ（高倍音の減衰を遅く）と音量をわずかに持ち上げる
     const brightness = 0.7 + 0.6 * Math.min(1, Math.max(0, progress));
     const late = progress > 0.7 ? LATE_VELOCITY_LIFT : 0;
     const velocity = Math.min(1, Math.max(0, event.velocity));
-    const peak = DOMINO_GAIN * gainScale * (0.8 + 0.4 * velocity) * (1 + late) * this.busyDuckLinear();
-    this.registerStart();
+    const peak = DOMINO_GAIN * gainScale * (0.8 + 0.4 * velocity) * (1 + late) * this.busyDuckLinear(atSeconds);
+    this.registerStart(atSeconds);
 
     const voice = context.createGain();
     const panner = context.createStereoPanner();
@@ -353,8 +364,9 @@ export class SynthAudioEngine implements AudioEngine {
     noiseSource.connect(noiseFilter).connect(noiseGain).connect(voice);
     noiseSource.start(atSeconds);
 
-    this.voices.push({ gain: voice, stopAtMs: performance.now() + (atSeconds - context.currentTime) * 1000 + longestSeconds * 1000 + 100, isFinale: false });
-    const cleanupAtMs = (atSeconds - context.currentTime) * 1000 + (longestSeconds + 0.1) * 1000;
+    const stopAtSeconds = atSeconds + longestSeconds + 0.1;
+    this.voices.push({ gain: voice, startsAtSeconds: atSeconds, stopAtSeconds, isFinale: false });
+    const cleanupAtMs = (stopAtSeconds - context.currentTime) * 1000;
     window.setTimeout(() => {
       for (const node of partialNodes) {
         node.osc.disconnect();
@@ -374,7 +386,7 @@ export class SynthAudioEngine implements AudioEngine {
     const context = this.context;
     const bus = this.fxIn;
     if (!context || !bus) return;
-    this.makeRoom(true, context);
+    if (!this.makeRoom(atSeconds, context)) return;
 
     // 低音: C2 + 小音量の C3（小型スピーカーでも低音の存在が分かるように）
     const bass = context.createGain();
@@ -442,8 +454,9 @@ export class SynthAudioEngine implements AudioEngine {
       this.wet.gain.linearRampToValueAtTime(wetNow + REVERB_WET_LATE, atSeconds + 0.4);
     }
 
-    this.voices.push({ gain: chord, stopAtMs: performance.now() + (atSeconds - context.currentTime) * 1000 + (FINALE_CHORD_DECAY_SECONDS + 0.2) * 1000, isFinale: true });
-    const cleanupAtMs = (atSeconds - context.currentTime) * 1000 + (FINALE_CHORD_DECAY_SECONDS + 0.2) * 1000;
+    const stopAtSeconds = atSeconds + FINALE_CHORD_DECAY_SECONDS + 0.2;
+    this.voices.push({ gain: chord, startsAtSeconds: atSeconds, stopAtSeconds, isFinale: true });
+    const cleanupAtMs = (stopAtSeconds - context.currentTime) * 1000;
     window.setTimeout(() => {
       for (const node of bassNodes) node.disconnect();
       for (const node of chordNodes) {
