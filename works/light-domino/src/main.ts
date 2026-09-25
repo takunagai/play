@@ -177,10 +177,18 @@ function endpointHitRadiusPx(width: number, height: number): number {
   return Math.max(ENDPOINT_HIT_MIN_PX, tileLengthPx(Math.min(width, height)) * ENDPOINT_HIT_RATIO);
 }
 
-/** 列の両端の画面座標（px） */
-function endpointPositions(settledStroke: SettlingStroke, width: number, height: number): { start: Vec2; end: Vec2 } {
+/** 正規化済みの板中心を現在の px 空間へ戻し、板数と順序を保ったまま接線を再計算する */
+function dominoesFromNormalizedPoints(points: readonly Vec2[], width: number, height: number): Domino[] {
+  const bounds = inputBounds(width, height);
+  const pixelPoints = points.map((point) => clampToBounds({ x: point.x * width, y: point.y * height }, bounds));
+  return buildDominoes(pixelPoints, width, height, performance.now()).slice(0, MAX_DOMINOES);
+}
+
+/** 列の両端の画面座標（px）。空列は入力処理と描画を止めずに無視する */
+function endpointPositions(settledStroke: SettlingStroke, width: number, height: number): { start: Vec2; end: Vec2 } | null {
   const first = settledStroke.dominoes[0];
   const last = settledStroke.dominoes[settledStroke.dominoes.length - 1];
+  if (!first || !last) return null;
   return {
     start: { x: first.nx * width, y: first.ny * height },
     end: { x: last.nx * width, y: last.ny * height },
@@ -252,12 +260,9 @@ new P5((p: P5) => {
       trailCanvas.height = p.height;
       hostEl?.appendChild(trailCanvas);
     } else if (trailCanvas.width !== p.width || trailCanvas.height !== p.height) {
-      const migrated = document.createElement("canvas");
-      migrated.width = p.width;
-      migrated.height = p.height;
-      migrated.getContext("2d")?.drawImage(trailCanvas, 0, 0, p.width, p.height);
-      trailCanvas = migrated;
-      hostEl?.appendChild(trailCanvas);
+      // 同じ DOM canvas を再利用する。寸法変更で画素は消えるが、直後に正規化データから再描画する。
+      trailCanvas.width = p.width;
+      trailCanvas.height = p.height;
     }
   };
 
@@ -295,11 +300,11 @@ new P5((p: P5) => {
   };
 
   const rebuildAfterResize = (): void => {
-    // 正規化座標から現在列と確定光跡を再構築する（docs/architecture.md 第 7.3 節）
+    // 正規化座標を現在の px 空間へ戻してから、現在列と確定光跡を再構築する。
     if (settled && normalizedStrokePoints) {
-      const width = p.width;
-      const height = p.height;
-      settled.dominoes = finalDominoesFromRaw(normalizedStrokePoints, width, height);
+      const rebuilt = dominoesFromNormalizedPoints(normalizedStrokePoints, p.width, p.height);
+      const matchesChainSchedule = state !== "chain" || !schedule || rebuilt.length === schedule.fallAtMs.length;
+      if (rebuilt.length > 0 && matchesChainSchedule) settled.dominoes = rebuilt;
     }
     if (stroke && normalizedStrokePoints) {
       stroke.rawPoints = normalizedStrokePoints.map((point) => ({ x: point.x * p.width, y: point.y * p.height }));
@@ -365,6 +370,7 @@ new P5((p: P5) => {
     const width = p.width;
     const height = p.height;
     const endpoints = endpointPositions(settled, width, height);
+    if (!endpoints) return;
     const hit = endpointHitRadiusPx(width, height);
     const distStart = Math.hypot(tapX - endpoints.start.x, tapY - endpoints.start.y);
     const distEnd = Math.hypot(tapX - endpoints.end.x, tapY - endpoints.end.y);
@@ -454,6 +460,7 @@ new P5((p: P5) => {
         }
         if (state === "aligned" && settled) {
           const endpoints = endpointPositions(settled, p.width, p.height);
+          if (!endpoints) return;
           const hit = endpointHitRadiusPx(p.width, p.height);
           const distStart = Math.hypot(x - endpoints.start.x, y - endpoints.start.y);
           const distEnd = Math.hypot(x - endpoints.end.x, y - endpoints.end.y);
@@ -506,6 +513,10 @@ new P5((p: P5) => {
     lastAmp = audio.getAmp(); // analyser の読み出しは 1 フレーム 1 回
 
     ensureLayers();
+    if (trails.some((trail) => trail.fadingSinceMs !== null)) {
+      trails = trails.filter((trail) => trail.fadingSinceMs === null || nowMs - trail.fadingSinceMs < TRAIL_FADE_MS);
+      repaintTrailLayer();
+    }
     const ctx = p.drawingContext;
 
     // ---- 状態の進行 ----
@@ -688,15 +699,17 @@ new P5((p: P5) => {
       if (state === "aligned") {
         const endpoints = endpointPositions(settled, p.width, p.height);
         const flashBoost = endpointFlashAtMs && nowMs >= endpointFlashAtMs.start && nowMs < endpointFlashAtMs.end ? 0.8 : 0;
-        for (const point of [endpoints.start, endpoints.end]) {
-          ctx.save();
-          ctx.globalCompositeOperation = "source-over";
-          ctx.globalAlpha = 0.25 + 0.55 * blink + flashBoost;
-          ctx.fillStyle = PALETTE_TILE;
-          ctx.beginPath();
-          ctx.arc(point.x, point.y, tileLen * 0.42, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
+        if (endpoints) {
+          for (const point of [endpoints.start, endpoints.end]) {
+            ctx.save();
+            ctx.globalCompositeOperation = "source-over";
+            ctx.globalAlpha = 0.25 + 0.55 * blink + flashBoost;
+            ctx.fillStyle = PALETTE_TILE;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, tileLen * 0.42, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         }
         if (endpointFlashAtMs && nowMs >= endpointFlashAtMs.end) endpointFlashAtMs = null;
       }
