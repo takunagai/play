@@ -58,7 +58,7 @@ VERIFY_CHROMIUM_PATH=/path/to/chromium pnpm verify <slug> # 別の Chromium を�
 
 ## 公開（デプロイ）
 
-Cloudflare Workers Builds が GitHub の `main` をビルドして本番に反映します（ビルド `pnpm install --frozen-lockfile && pnpm build`、デプロイ `npx wrangler deploy`）。PR ブランチはプレビュー版がビルドされ、URL が PR にコメントされます。手元から `wrangler deploy` はしません。
+Cloudflare Workers Builds が GitHub の `main` をビルドして本番に反映します（ビルド `pnpm install --frozen-lockfile && pnpm build`、デプロイ `npx wrangler deploy`）。PR ブランチはプレビュー版がビルドされ（`npx wrangler preview`。`wrangler.jsonc` の `previews` と `preview_urls` が必要）、`https://<ブランチ名>-play.nagai-shouten.workers.dev` が PR にコメントされます。手元から `wrangler deploy` はしません。
 
 ## ライセンス
 

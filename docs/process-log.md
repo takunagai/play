@@ -46,3 +46,12 @@
 ### 公開リポジトリにする前の確認
 
 - prism-pop の履歴に LAN の IP アドレス（192.168.x.x）が 2 か所ある（2026-09-24 のコミットで作業ツリーからは伏せ済み。元リポジトリ takunagai/prism-pop は既に公開）。subtree で履歴ごと取り込んだので、play にも同じ履歴が入る
+
+## 2026-09-25 Workers Builds と本番公開
+
+- 一覧ページのデザインは、ユーザーが別セッションの `/design` で作り直した（`c7adc92`）
+- Node / pnpm の指定: ビルドログに `Detected the following tools from environment: nodejs@26.5.1, pnpm@11.21.0`。`.node-version` と `packageManager` の両方が効く
+- ブランチビルドの既定コマンドは `npx wrangler preview`（Worker Previews）。`wrangler.jsonc` に `previews` ブロックが無いと `Your Wrangler configuration is missing a previews block` で失敗する → 空の `"previews": {}` を追加
+- `previews` を足してもビルドは成功するのに PR のコメントは「No Preview URL」だった。`preview_urls: true` が必要で、しかもこの設定は **本番の `wrangler deploy` で反映される**（公式: /workers/previews/custom-domains/）。main に取り込んで本番を再デプロイした後のブランチビルドで、`https://<ブランチ名>-play.nagai-shouten.workers.dev` がコメントされた
+- 依存キャッシュ: 効く。1 回目は再利用 0、2 回目は heartburst 89/89・ルート 36/37・prism-pop 13/35 を再利用。install 6.9 秒 → 4.8 秒、ビルド全体 44 秒 → 41 秒（初期化と Node の導入が大半）
+- 本番確認: `https://play.nagai-shouten.com/`・`/works/prism-pop/`・`/works/heartburst/` が 200、OGP の URL は本番と一致。`pnpm verify <slug> --url https://play.nagai-shouten.com` で 2 作品ともタッチを含む 5 項目 pass（E2E は agent-browser の代わりに、同じ CDP タッチを使う `pnpm verify` で行った）
