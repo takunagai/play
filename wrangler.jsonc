@@ -10,4 +10,6 @@
   "routes": [{ "pattern": "play.nagai-shouten.com", "custom_domain": true }],
   // PR ブランチのビルドは Workers Builds が npx wrangler preview を実行する。Preview には previews ブロックが必須（中身は空でよい）
   "previews": {},
+  // Preview の URL（*.workers.dev）を発行する。無いとビルドは成功しても PR に URL が付かない
+  "preview_urls": true,
 }
