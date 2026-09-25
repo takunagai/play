@@ -100,6 +100,8 @@ import {
   TILE_OUTLINE_ALPHA,
   TILE_SIDE_BAND_ALPHA,
   TILE_WIDTH_PX,
+  TRAIL_CORE_ALPHA_AFTERGLOW,
+  TRAIL_CORE_ALPHA_COMMIT,
   TRAIL_WIDTH_PX,
   TRACING_ECHO_ALPHA,
   TRACING_ECHO_MS,
@@ -368,9 +370,23 @@ new P5((p: P5) => {
     trailCtx.lineCap = "round";
     trailCtx.lineJoin = "round";
     trailCtx.strokeStyle = PALETTE_GOLD;
-    let nodeCount = 0;
-    for (const trail of trails) {
-      trailCtx.globalAlpha = trails.length > 8 ? 0.8 : 1;
+    // 各 trail の節点数（交叉点には節点を置かない）
+    const nodeCounts = trails.map((trail) => trail.crossing.reduce((sum, flag) => (flag ? sum : sum + 1), 0));
+    // 正本 §7.2: 蓄積上限（節点 300）超過時は古い演奏から順に残光段階へ落とし、節点・蕊は減衰させて残す。
+    // 新しい演奏から 300 個ぶんを「確定直後」、あふれた古い trail を「残光段階」とする。
+    let nodeBudget = MAX_LIVE_NODES;
+    const isAfterglow = new Array<boolean>(trails.length).fill(false);
+    for (let index = trails.length - 1; index >= 0; index--) {
+      if (nodeCounts[index] <= nodeBudget) {
+        nodeBudget -= nodeCounts[index];
+      } else {
+        isAfterglow[index] = true;
+      }
+    }
+    trails.forEach((trail, trailIndex) => {
+      // 正本 §7.2: 確定直後の蕊は alpha 1.0。残光段階では 0.5 に減衰して消さない。
+      const coreAlpha = isAfterglow[trailIndex] ? TRAIL_CORE_ALPHA_AFTERGLOW : TRAIL_CORE_ALPHA_COMMIT;
+      trailCtx.globalAlpha = coreAlpha;
       trailCtx.lineWidth = TRAIL_WIDTH_PX;
       trailCtx.beginPath();
       trail.points.forEach((point, index) => {
@@ -383,21 +399,20 @@ new P5((p: P5) => {
       for (let index = 0; index < trail.points.length; index++) {
         const point = trail.points[index];
         if (trail.crossing[index]) continue;
-        if (nodeCount >= MAX_LIVE_NODES) break;
         const x = point.x * p.width;
         const y = point.y * p.height;
-        trailCtx.globalAlpha = NODE_HALO_ALPHA;
+        // 節点も蕊と同じ係数で減衰させる。ただし消すことはない（正本 §3.5「星図は消えない」）。
+        trailCtx.globalAlpha = NODE_HALO_ALPHA * coreAlpha;
         trailCtx.fillStyle = PALETTE_GOLD;
         trailCtx.beginPath();
         trailCtx.arc(x, y, NODE_HALO_RADIUS_PX, 0, Math.PI * 2);
         trailCtx.fill();
-        trailCtx.globalAlpha = 1;
+        trailCtx.globalAlpha = coreAlpha;
         trailCtx.beginPath();
         trailCtx.arc(x, y, NODE_RADIUS_PX, 0, Math.PI * 2);
         trailCtx.fill();
-        nodeCount++;
       }
-    }
+    });
     trailCtx.globalAlpha = 1;
   };
 

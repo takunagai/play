@@ -82,8 +82,10 @@ export const SHOCKWAVE_MS = 650;
 // ---- 光跡 ----
 /** 確定光跡の上限本数 */
 export const MAX_COMMITTED_TRAILS = 24;
-/** 上限超過時に最古の光跡を消す時間（ms） */
-export const TRAIL_FADE_MS = 1500;
+/** 確定直後の蕊 alpha（正本 §7.2） */
+export const TRAIL_CORE_ALPHA_COMMIT = 1.0;
+/** 残光段階の蕊 alpha（正本 §7.2: 節点上限超過後も蕊は消さず 0.5 へ減衰する） */
+export const TRAIL_CORE_ALPHA_AFTERGLOW = 0.5;
 /** 光跡の線幅（px） */
 export const TRAIL_WIDTH_PX = 2.5;
 
