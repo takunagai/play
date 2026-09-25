@@ -872,10 +872,12 @@ new P5((p: P5) => {
 
     if (stroke && stroke.dominoes.length > 0) {
       const previewDominoes = stroke.dominoes;
+      // 満たない列は破棄時刻までの 240ms で alpha を 0 へフェードさせてから捨てる（正本 §3.2）
+      const discardFade = discardDeadlineMs === null ? 1 : Math.max(0, (discardDeadlineMs - nowMs) / STROKE_DISCARD_MS);
       const headStart = Math.max(0, previewDominoes.length - 3);
       previewDominoes.forEach((domino, index) => {
         const head = index >= headStart ? (index - headStart + 1) / Math.max(1, previewDominoes.length - headStart) : 0;
-        const alpha = TRACING_TILE_ALPHA + (TRACING_TILE_HEAD_ALPHA - TRACING_TILE_ALPHA) * head;
+        const alpha = (TRACING_TILE_ALPHA + (TRACING_TILE_HEAD_ALPHA - TRACING_TILE_ALPHA) * head) * discardFade;
         drawDomino(domino, PALETTE_TILE, alpha, null, true);
       });
     }

@@ -163,7 +163,6 @@ export function crossingFlags(points: readonly Vec2[]): boolean[] {
   const flags = points.map(() => false);
   for (let first = 0; first < points.length - 1; first++) {
     for (let second = first + 2; second < points.length - 1; second++) {
-      if (first === 0 && second === points.length - 2) continue;
       if (!segmentsCross(points[first], points[first + 1], points[second], points[second + 1])) continue;
       flags[first] = true;
       flags[first + 1] = true;
