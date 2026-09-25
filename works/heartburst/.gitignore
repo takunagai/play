@@ -1,4 +1,1 @@
-.DS_Store
-handover/
-processing/Heartburst/out/
-*.log
+native/processing/Heartburst/out/
