@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // 作品集 play: 静的アセットだけの Worker（main なし）。dist/ は pnpm build が作る
+  "name": "play",
+  "compatibility_date": "2026-09-25",
+  "assets": {
+    "directory": "./dist",
+    // html_handling は既定の auto-trailing-slash（/works/<slug>/ はフォルダの index.html として配信される）
+  },
+  "routes": [{ "pattern": "play.nagai-shouten.com", "custom_domain": true }],
+}
