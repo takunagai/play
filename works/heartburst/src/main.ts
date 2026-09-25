@@ -102,6 +102,7 @@ import {
 import { Particle, Shockwave, buildVignette } from "./visuals";
 import type { SimState, FrameParams } from "./visuals";
 import { createAudioEngine, isVoiceSupported } from "./audio/engine";
+import { createFrameCounter, installArtHook } from "./art-hook";
 import type { BurstStyle } from "./audio/engine";
 import { CHORD_PROGRESSION, midiHue, tapToMidi } from "./music";
 import { FINALE_RELEASES, SCENES } from "./scenes";
@@ -112,7 +113,16 @@ const audio = createAudioEngine();
 // チューニング・検証用に露出（本番でも害はない読み取り専用ハンドル）
 (window as unknown as { __heartburstAudio: unknown }).__heartburstAudio = audio;
 
-// AGPLv3（web/LICENSE）ソース公開の表記。画面上は遊び方カードの末尾にも同じリンクがある
+// 作品集 play の検証契約（scripts/verify-work.mjs が読む）。既存の状態・計測値をそのまま返すだけ
+let artAmp = 0;
+const artFrameCounter = createFrameCounter();
+installArtHook({
+  getAmp: () => artAmp,
+  getState: () => (hasStarted ? state : "intro"),
+  getFrameStats: () => artFrameCounter.stats(),
+});
+
+// AGPLv3（LICENSE）ソース公開の表記。画面上は遊び方カードの末尾にも同じリンクがある
 console.info("Heartburst ─ licensed under AGPLv3. source: https://github.com/takunagai/play/tree/main/works/heartburst");
 
 // ---- 状態機械 ----
@@ -1626,6 +1636,7 @@ const sketch = (p: p5) => {
     f.timeScale = timeScale;
     f.friction = Math.pow(FRICTION, timeScale);
     f.amp = audio.getAmp(); // analyser 読み出しは 1 フレーム 1 回
+    artAmp = f.amp;
     updateBeatPulse(f.amp, p.millis());
     f.width = p.width;
     f.height = p.height;
@@ -1725,7 +1736,9 @@ const sketch = (p: p5) => {
       if (flashAlpha < 0.5) flashAlpha = 0;
     }
 
-    drawMsAverage += (performance.now() - drawStart - drawMsAverage) * 0.1;
+    const drawMs = performance.now() - drawStart;
+    drawMsAverage += (drawMs - drawMsAverage) * 0.1;
+    artFrameCounter.record(drawMs);
     drawProgressDots(p);
     if (showHud) drawHud(p);
 

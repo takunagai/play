@@ -1,0 +1,15 @@
+{
+  "slug": "prism-pop",
+  "title": "Prism Pop",
+  "date": "2026-09-24",
+  "origin": "dialogue",
+  "summary": "漂う泡をタップで割ると、ベルが鳴り和音が積み上がる",
+  "emotion": "快感・連打",
+  "verb": "弾く・割る",
+  "tone": "有機的グラデーション",
+  "sound": "アコースティック風",
+  "scale": "リディアン",
+  "thumbnail": "thumbnail.webp",
+  "license": "MIT",
+  "generatedImages": []
+}

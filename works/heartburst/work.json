@@ -1,0 +1,15 @@
+{
+  "slug": "heartburst",
+  "title": "Heartburst",
+  "date": "2026-07-13",
+  "origin": "dialogue",
+  "summary": "長押しで溜めて、離した瞬間に弾けさせる。胸の内を解き放つカタルシス",
+  "emotion": "カタルシス解放",
+  "verb": "溜めて解放",
+  "tone": "ダーク＋ネオン",
+  "sound": "電子シンセ",
+  "scale": "マイナーペンタトニック",
+  "thumbnail": "thumbnail.webp",
+  "license": "AGPL-3.0",
+  "generatedImages": []
+}

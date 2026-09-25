@@ -8,6 +8,7 @@ import P5 from "p5";
 import "./style.css";
 
 import { createAudioEngine } from "./audio/engine";
+import { createFrameCounter, installArtHook } from "./art-hook";
 import type { PopKind } from "./audio/engine";
 import { anchorForSize, colorForDegree, noteForPop } from "./music";
 import {
@@ -206,6 +207,14 @@ declare global {
   }
 }
 window.__prismDebug = () => collectDebugInfo();
+
+// 作品集 play の検証契約（scripts/verify-work.mjs が読む）。既存の計測値をそのまま返すだけ
+const artFrameCounter = createFrameCounter();
+installArtHook({
+  getAmp: () => lastAmp,
+  getState: () => (hasStarted ? "playing" : "intro"),
+  getFrameStats: () => artFrameCounter.stats(),
+});
 
 // 開発ビルドのみ: E2E 検証で泡の位置を狙って本物のポインタ・タッチを送るためのハンドル
 if (import.meta.env.DEV) {
@@ -552,6 +561,7 @@ new P5((p: P5) => {
 
     const drawMs = performance.now() - drawStartMs;
     pushHistory(drawTimeHistory, drawMs);
+    artFrameCounter.record(drawMs);
 
     if (isDebugMode) {
       debugFrameCounter++;
