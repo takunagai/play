@@ -10,7 +10,7 @@ pnpm build    # tsc --noEmit → vite build
 
 公開: 作品集 play の一部として https://play.nagai-shouten.com/works/prism-pop/ で配信（デプロイは play リポジトリの README を参照）
 
-開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）
+開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）/ `?pops=N`（開発ビルドのみ。泡の累計の初期値）
 
 ## 視覚・操作・品質のノブ（`src/tuning.ts`）
 
