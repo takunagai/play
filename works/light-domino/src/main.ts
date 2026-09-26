@@ -339,6 +339,13 @@ P5.disableFriendlyErrors = true;
 new P5((p: P5) => {
   let glowCanvas: HTMLCanvasElement | null = null;
   let trailCanvas: HTMLCanvasElement | null = null;
+  // 静的層（正本 §7.3: 床の放射照り・格子・周辺減光は 1 回焼き、毎フレームは転画だけ）。
+  let floorGlowLayer: HTMLCanvasElement | null = null;
+  let floorGlowLayerKey = "";
+  let gridLayer: HTMLCanvasElement | null = null;
+  let vignetteLayer: HTMLCanvasElement | null = null;
+  /** 眠る光の円弧を焼いたスプライト（core = 中身, glow = 周辺光）。rAF 内で円弧を生成しないためのもの（正本 §3.1）。 */
+  let sleepingLightSprites: { core: HTMLCanvasElement; glow: HTMLCanvasElement }[] = [];
 
   const ensureLayers = (): void => {
     // グローは縮小キャンバスを別 DOM レイヤーへ置き、CSS 拡大で柔らかくする。
@@ -416,6 +423,123 @@ new P5((p: P5) => {
     trailCtx.globalAlpha = 1;
   };
 
+  /** 指定サイズの静的層用キャンバスを用意する（既存と同寸法なら再利用）。 */
+  const ensureStaticLayer = (layer: HTMLCanvasElement, width: number, height: number): CanvasRenderingContext2D | null => {
+    if (layer.width !== width || layer.height !== height) {
+      layer.width = width;
+      layer.height = height;
+    }
+    const ctx = layer.getContext("2d");
+    if (!ctx) return null;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    return ctx;
+  };
+
+  /** 床の放射照り（L1）を静的層へ 1 回焼く。chain 中は中心・色温度・alpha が動くため鍵が変わった時だけ焼き直す（正本 §7.3 / §3.4）。 */
+  const repaintFloorGlowLayer = (chainProgress: number): void => {
+    const key = `${p.width}x${p.height}:${floorLightCenter.x.toFixed(4)},${floorLightCenter.y.toFixed(4)}:${chainProgress.toFixed(4)}`;
+    if (key === floorGlowLayerKey) return;
+    floorGlowLayerKey = key;
+    if (!floorGlowLayer) floorGlowLayer = document.createElement("canvas");
+    const ctx = ensureStaticLayer(floorGlowLayer, p.width, p.height);
+    if (!ctx) return;
+    const floorX = floorLightCenter.x * p.width;
+    const floorY = floorLightCenter.y * p.height;
+    const radius = Math.min(p.width, p.height) * FLOOR_GLOW_RADIUS_RATIO;
+    const mixChannel = (start: number, end: number, amount: number): number => Math.round(start + (end - start) * amount);
+    const glowColor = `rgb(${mixChannel(26, 42, chainProgress)}, ${mixChannel(31, 38, chainProgress)}, ${mixChannel(41, 32, chainProgress)})`;
+    const floorGlow = ctx.createRadialGradient(floorX, floorY, 0, floorX, floorY, Math.max(1, radius));
+    floorGlow.addColorStop(0, glowColor);
+    floorGlow.addColorStop(1, "rgba(17, 19, 24, 0)");
+    ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (FLOOR_GLOW_ALPHA_END - FLOOR_GLOW_ALPHA_START) * chainProgress;
+    ctx.fillStyle = floorGlow;
+    const portraitScaleY = p.height > p.width ? 4 / 3 : 1;
+    ctx.save();
+    ctx.translate(floorX, floorY);
+    ctx.scale(1, portraitScaleY);
+    ctx.translate(-floorX, -floorY);
+    ctx.fillRect(0, 0, p.width, p.height / portraitScaleY);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  };
+
+  /** 床の格子（L2）を静的層へ 1 回焼く。リサイズ時だけ呼ぶ（正本 §7.3）。 */
+  const repaintGridLayer = (): void => {
+    if (!gridLayer) gridLayer = document.createElement("canvas");
+    const ctx = ensureStaticLayer(gridLayer, p.width, p.height);
+    if (!ctx) return;
+    const gridSpacing = p.width <= 430 ? MOBILE_FLOOR_GUIDE_SPACING_PX : FLOOR_GUIDE_SPACING_PX;
+    ctx.globalAlpha = FLOOR_GUIDE_ALPHA;
+    ctx.strokeStyle = PALETTE_TILE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = gridSpacing / 2; x < p.width; x += gridSpacing) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, p.height);
+    }
+    for (let y = gridSpacing / 2; y < p.height; y += gridSpacing) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(p.width, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+
+  /** 周辺減光を静的層へ 1 回焼く。リサイズ時だけ呼ぶ（正本 §7.3）。 */
+  const repaintVignetteLayer = (): void => {
+    if (!vignetteLayer) vignetteLayer = document.createElement("canvas");
+    const ctx = ensureStaticLayer(vignetteLayer, p.width, p.height);
+    if (!ctx) return;
+    const vignetteRadius = Math.hypot(p.width, p.height) * 0.56;
+    const vignette = ctx.createRadialGradient(p.width / 2, p.height / 2, Math.min(p.width, p.height) * 0.18, p.width / 2, p.height / 2, vignetteRadius);
+    vignette.addColorStop(0, "rgba(17, 19, 24, 0)");
+    vignette.addColorStop(0.72, "rgba(17, 19, 24, 0.12)");
+    vignette.addColorStop(1, "rgba(17, 19, 24, 0.68)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, p.width, p.height);
+  };
+
+  /** 眠る光の円弧をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ（正本 §3.1: 毎フレームは位置を転画して alpha だけ掛ける）。 */
+  const buildSleepingLightSprites = (): void => {
+    if (sleepingLights.length === 0) return;
+    const maxRadius = Math.max(...sleepingLights.map((light) => light.radius));
+    const spriteSize = Math.ceil(maxRadius * 9);
+    sleepingLightSprites = sleepingLights.map((light) => {
+      const size = spriteSize;
+      const center = size / 2;
+      const glowCanvas = document.createElement("canvas");
+      glowCanvas.width = size;
+      glowCanvas.height = size;
+      const glowCtx = glowCanvas.getContext("2d");
+      if (glowCtx) {
+        glowCtx.fillStyle = PALETTE_GOLD;
+        glowCtx.beginPath();
+        glowCtx.arc(center, center, light.radius * 4.5, 0, Math.PI * 2);
+        glowCtx.fill();
+      }
+      const coreCanvas = document.createElement("canvas");
+      coreCanvas.width = size;
+      coreCanvas.height = size;
+      const coreCtx = coreCanvas.getContext("2d");
+      if (coreCtx) {
+        coreCtx.fillStyle = PALETTE_GOLD;
+        coreCtx.beginPath();
+        coreCtx.arc(center, center, light.radius, 0, Math.PI * 2);
+        coreCtx.fill();
+      }
+      return { core: coreCanvas, glow: glowCanvas };
+    });
+  };
+
+  /** 静的層を現在のキャンバス寸法で焼き直す。setup とリサイズ時のみ呼ぶ。 */
+  const repaintStaticLayers = (): void => {
+    floorGlowLayerKey = "";
+    repaintGridLayer();
+    repaintVignetteLayer();
+    buildSleepingLightSprites();
+  };
+
   const rebuildAfterResize = (): void => {
     // 正規化座標を現在の px 空間へ戻してから、現在列と確定光跡を再構築する。
     if (settled && normalizedStrokePoints) {
@@ -428,6 +552,8 @@ new P5((p: P5) => {
       rebuildPreviewDominoes(stroke, p.width, p.height);
     }
     repaintTrailLayer();
+    // 正本 §7.3: 静的層（床の放射照り・格子・周辺減光・眠る光の円弧）はリサイズ時だけ焼き直す。
+    repaintStaticLayers();
   };
 
   /** ポインタの現在位置をなぞりに記録する（間引き + 仮配置の更新） */
@@ -546,6 +672,7 @@ new P5((p: P5) => {
     introTiles = buildIntroTiles(p.width, p.height);
     sleepingLights = buildSleepingLights();
     ensureLayers();
+    repaintStaticLayers();
 
     const resize = (): void => {
       p.resizeCanvas(window.innerWidth, window.innerHeight);
@@ -697,43 +824,18 @@ new P5((p: P5) => {
     const chainProgress = settled && schedule
       ? Math.max(0, settled.goldThrough + 1) / Math.max(1, settled.dominoes.length)
       : 0;
-    const mixChannel = (start: number, end: number, amount: number): number => Math.round(start + (end - start) * amount);
-    const glowColor = `rgb(${mixChannel(26, 42, chainProgress)}, ${mixChannel(31, 38, chainProgress)}, ${mixChannel(41, 32, chainProgress)})`;
 
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
     ctx.fillStyle = PALETTE_BACKGROUND;
     ctx.fillRect(0, 0, p.width, p.height);
-    const floorX = floorLightCenter.x * p.width;
-    const floorY = floorLightCenter.y * p.height;
-    const radius = Math.min(p.width, p.height) * FLOOR_GLOW_RADIUS_RATIO;
-    const floorGlow = ctx.createRadialGradient(floorX, floorY, 0, floorX, floorY, Math.max(1, radius));
-    floorGlow.addColorStop(0, glowColor);
-    floorGlow.addColorStop(1, "rgba(17, 19, 24, 0)");
-    ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (FLOOR_GLOW_ALPHA_END - FLOOR_GLOW_ALPHA_START) * chainProgress;
-    ctx.fillStyle = floorGlow;
-    const portraitScaleY = p.height > p.width ? 4 / 3 : 1;
-    ctx.save();
-    ctx.translate(floorX, floorY);
-    ctx.scale(1, portraitScaleY);
-    ctx.translate(-floorX, -floorY);
-    ctx.fillRect(0, 0, p.width, p.height / portraitScaleY);
-    ctx.restore();
-    const gridSpacing = p.width <= 430 ? MOBILE_FLOOR_GUIDE_SPACING_PX : FLOOR_GUIDE_SPACING_PX;
-    ctx.globalAlpha = FLOOR_GUIDE_ALPHA;
-    ctx.strokeStyle = PALETTE_TILE;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = gridSpacing / 2; x < p.width; x += gridSpacing) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, p.height);
-    }
-    for (let y = gridSpacing / 2; y < p.height; y += gridSpacing) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(p.width, y);
-    }
-    ctx.stroke();
+    // 床の放射照り（L1）は静的層へ焼いた 1 枚を転画する。chain 中は中心・色温度が動くため鍵が変わった時だけ焼き直す
+    // （正本 §7.3「床 4 層とガイド線は静的キャンバスへ 1 回描き、リサイズ時だけ再描き」/ §3.4）。
+    repaintFloorGlowLayer(chainProgress);
+    ctx.globalAlpha = 1;
+    if (floorGlowLayer) ctx.drawImage(floorGlowLayer, 0, 0);
+    if (gridLayer) ctx.drawImage(gridLayer, 0, 0);
     ctx.restore();
 
     if (trailCanvas) ctx.drawImage(trailCanvas, 0, 0);
@@ -770,34 +872,25 @@ new P5((p: P5) => {
       if (retrace < 1) glowGoldPath([...newestTrail.points].reverse(), 0.08 * (1 - retrace), 10, retrace);
     }
 
-    ctx.save();
-    const vignetteRadius = Math.hypot(p.width, p.height) * 0.56;
-    const vignette = ctx.createRadialGradient(p.width / 2, p.height / 2, Math.min(p.width, p.height) * 0.18, p.width / 2, p.height / 2, vignetteRadius);
-    vignette.addColorStop(0, "rgba(17, 19, 24, 0)");
-    vignette.addColorStop(0.72, "rgba(17, 19, 24, 0.12)");
-    vignette.addColorStop(1, "rgba(17, 19, 24, 0.68)");
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, p.width, p.height);
-    ctx.restore();
+    // 周辺減光は静的層の 1 枚を転画するだけ（正本 §7.3）。
+    if (vignetteLayer) ctx.drawImage(vignetteLayer, 0, 0);
 
     const introVisibility = introFadeStartedMs === null ? 1 : Math.max(0, 1 - (nowMs - introFadeStartedMs) / INTRO_FADE_MS);
     if (introVisibility > 0) {
-      for (const light of sleepingLights) {
+      // 眠る光の位置は完全静的。毎フレームは焼いた円弧スプライトの転画 + alpha 掛けだけ（正本 §3.1）。
+      for (let index = 0; index < sleepingLights.length; index++) {
+        const light = sleepingLights[index];
+        const sprite = sleepingLightSprites[index];
+        if (!sprite) continue;
         const wave = 0.7 + 0.3 * Math.sin((nowMs / light.periodMs) * Math.PI * 2 + light.phase);
         const awakened = light.awakenedAtMs !== null && nowMs - light.awakenedAtMs < 500 ? 1 : 0;
         const x = light.nx * p.width;
         const y = light.ny * p.height;
-        ctx.save();
-        ctx.fillStyle = PALETTE_GOLD;
-        ctx.globalAlpha = introVisibility * Math.min(0.9, 0.5 + 0.35 * wave + 0.2 * awakened);
-        ctx.beginPath();
-        ctx.arc(x, y, light.radius, 0, Math.PI * 2);
-        ctx.fill();
         ctx.globalAlpha = introVisibility * SLEEPING_GLOW_ALPHA;
-        ctx.beginPath();
-        ctx.arc(x, y, light.radius * 4.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        ctx.drawImage(sprite.glow, x - sprite.glow.width / 2, y - sprite.glow.height / 2);
+        ctx.globalAlpha = introVisibility * Math.min(0.9, 0.5 + 0.35 * wave + 0.2 * awakened);
+        ctx.drawImage(sprite.core, x - sprite.core.width / 2, y - sprite.core.height / 2);
+        ctx.globalAlpha = 1;
       }
     }
 
