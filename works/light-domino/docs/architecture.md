@@ -73,7 +73,7 @@ finale（終演）
 
 - 墨色の床と少数の休止中の板に加え、下の「床の常駐描画」を置く。タイトル「光のドミノ」と案内「なぞって、端を押す」は下部帯の脇役
 - **床の常駐描画（intro の主役）**: 操作前から床が見える。冷たい照り・格子・周辺減光・遠景の展示構造（第 7.1 節の L0〜L3 と第 7.1 節 b）に加え、**寝ている光の断片**を 12〜18 個常駐させる。`gold` 半径 1〜2px・alpha 0.5〜0.9 + 各点 alpha 0.05 のグロー 1 層、周期 4〜7s の明滅（位相は点ごとにずらす）。確定済み星図があるときは節点が alpha 0.35 に沈んで眠る。描画は静的キャンバスへ 1 回焼き、明滅のみ毎フレームで alpha を掛ける（rAF 負荷を増やさない）
-- **床の照りのドリフト（第 2 強化ラウンド）**: `coolGlow` の斜めの帯（alpha 0.04 以下・帯幅 = `min(w, h) × 約 0.3`）が 24 秒周期で床を横切る。全状態で常時。静的焼き付け層の上・板の下に描く。L2 ガイド格子は動かさない。影の方向は変えない。reduced-motion では静止（帯は位置固定のまま存在）
+- **床の照りのドリフト（第 2 強化ラウンド）**: `coolGlow` の斜めの帯（alpha 0.10 以下・帯幅 = `min(w, h) × 約 0.3`・濃度は raised cosine の縁勾配：両端で勾配 0・中心で最大）が 24 秒周期で床を横切る。全状態で常時。静的焼き付け層の上・板の下に描く。L2 ガイド格子は動かさない。影の方向は変えない。reduced-motion では静止（帯は位置固定のまま存在）。上限 0.10 の理由と参考数値は `art-direction.md` §7.1 に譲る
 - 文字は脇役: タイトル 22px（alpha 0.85）+ 案内 13px（alpha 0.55）を画面下部 22% の帯に置き、床の主役を文字より先に見せる（taste-guide 合否 7 の「埋もれない」は脇役化で満たす）
 - 最初の指が触れた瞬間、触点に近い寝ている点 2〜3 個が alpha 0.9 に立ち上がる（文字より先に世界が応える）
 - 画面中央の最初のタップでオーバーレイを消し、`audio.start()` を呼ぶ。このタップ自体は道の始点にしない
@@ -247,7 +247,7 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 3. **L2 ガイド線**: 間隔 48px（375px では 32px）の格子、`warmWhite` alpha 0.03、線幅 1px。動かさない。等高線（同心円・間隔 64px・alpha 0.025）でもよいが必ずどちらか 1 本。静的キャンバスへ 1 回焼く
 4. **確定道の永続レイヤー**: 確定済み星図（蕊 + 節点）。offscreen canvas に保持し毎フレーム 1 回合成。「L2 ガイド線の直上・L3 周辺減光の直下」に置き、以後減衰しない（残光のみ減衰）。旧「静的な光跡レイヤー」の後継
 5. **L3 周辺減光**: 四辺へ向かって `ink` alpha 0 → 0.55 の上塗り。長辺方向は短辺より緩く効かせる
-6. **床の照りのドリフト（第 2 強化ラウンド）**: `coolGlow` の斜めの帯（alpha 0.04 以下・帯幅 = `min(w, h) × 約 0.3`）が 24 秒周期で床を線形に横切る。静的焼き付け層の上・板の下。L2 格子は動かさない。影の方向は変えない。reduced-motion では静止（帯は位置固定のまま存在）
+6. **床の照りのドリフト（第 2 強化ラウンド）**: `coolGlow` の斜めの帯（alpha 0.10 以下・帯幅 = `min(w, h) × 約 0.3`・raised cosine の縁勾配：両端で勾配 0・中心で最大）が 24 秒周期で床を線形に横切る。静的焼き付け層の上・板の下。L2 格子は動かさない。影の方向は変えない。reduced-motion では静止（帯は位置固定のまま存在）。上限 0.10 の理由と参考数値は `art-direction.md` §7.1 に譲る
 7. 現在の板列。2D context の `save/translate/rotate/scale/fillRect` でまとめて描く（床影 → 上面 → 手前側面 → エッジ反射の順。第 7.2 節）
 8. 終演光（開花の波・衝撃波・発光パルス）。縮小した glow canvas を CSS で拡大し、芯へ再帰的に焼き込まない。glow 積算は `gold` のみ・同一地点 alpha ≤ 0.12・最大 2 層
 9. 導入 UI（下部帯・脇役）/ `?debug` 診断
@@ -427,7 +427,7 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 | `BACKDROP_COLUMN_COUNT_MIN` / `_MAX` | 3 / 4 | 柱の気配の本数 |
 | `BACKDROP_COLUMN_ALPHA` | 0.015 | 柱の帯の alpha 上限（静的層へ焼き付け） |
 | `FLOOR_DRIFT_PERIOD_MS` | 24000 | 床の照りのドリフトの周期 |
-| `FLOOR_DRIFT_ALPHA_MAX` | 0.04 | ドリフト帯の alpha 上限 |
+| `FLOOR_DRIFT_ALPHA_MAX` | 0.10 | ドリフト帯の alpha 上限（0.04 から引き上げ。理由と参考数値は `art-direction.md` §7.1: 0.04 では検証プローブで検出不能な水準のため、視認性確保で 0.10。帯の濃度は線形でなく raised cosine） |
 | `FLOOR_DRIFT_WIDTH_RATIO` | 0.3 | ドリフト帯の幅 = `min(w, h) × この値` |
 | `NODE_BREATHE_ALPHA_MIN` / `_MAX` | 0.35 / 0.5 | 星図の呼吸の alpha 範囲 |
 | `NODE_BREATHE_PERIOD_MIN_MS` / `_MAX_MS` | 4000 / 7000 | 星図の呼吸の周期範囲（節点ごとに位相をずらす） |
@@ -444,6 +444,6 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 | `FINALE_BASS_GAIN`（audio-tuning） | 0.34 | 終演ベースの gain（0.3 から） |
 | `FINALE_CHORD_DECAY_SECONDS_BASE` / `_T_FACTOR`（audio-tuning） | 4.8 / 1.7 | 終演和音の減衰秒 = base + factor × t（最大 6.5） |
 
-移行メモ（第 2 強化ラウンド）: `PLACE_CLICK_HZ`（固定 900Hz）は音階度ピッチ化により参照しなくなる見込みだが、既存キー保持ルールにより削除しない（legacy 扱いへ移行）。`FLOOR_DRIFT_*` は reduced-motion では周期計算へ進めても位相を固定する（帯は静止したまま存在）。
+移行メモ（第 2 強化ラウンド）: `PLACE_CLICK_HZ`（固定 900Hz）は音階度ピッチ化により参照しなくなる見込みだが、既存キー保持ルールにより削除しない（legacy 扱いへ移行）。`FLOOR_DRIFT_*` は reduced-motion では周期計算へ進めても位相を固定する（帯は静止したまま存在）。正本更新 R4（2026-09-27）: `FLOOR_DRIFT_ALPHA_MAX` を 0.04 → 0.10 へ引き上げ、帯の濃度プロファイルを線形から raised cosine（両端で勾配 0・中心で最大）へ変更。`FLOOR_DRIFT_PERIOD_MS` 24000 と `FLOOR_DRIFT_WIDTH_RATIO` 0.3 は変更なし。引き上げの理由と参考数値は `art-direction.md` §7.1。
 
 移行メモ: 正本旧 §10 記載の `FINALE_AFTERGLOW_MS`（余韻の静寂）は、実装が bloom 系の時間だけで終演を構成するため採用しない。`TRACING_FOLLOW_DELAY_MS` は仮板列が指へ即時追従（§3.2）のため採用しない。`SLEEPING_LIGHT_RADIUS_PX` / `SLEEPING_LIGHT_ALPHA` は配列型の想定だったが、実装は MIN/MAX 型と「基準値 + 明滅振幅 + 覚醒加算」の合成へ置き換わっている（上の表のとおり）。`SHADOW_OFFSET_PX` は `SHADOW_OFFSET_X_PX` / `_Y_PX` へ分割。`DRAW_FORBIDDEN_MARGIN_PX` は既存の `INPUT_EDGE_INSET_PX` が同一の役割を担うため新設しない。
