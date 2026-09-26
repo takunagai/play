@@ -232,6 +232,27 @@ export const ACCUMULATION_VELOCITY_BOOST = 0.05;
 export const PARALLEL_RUN_MIN_GAP_PX = 6;
 export const IGNORE_BAND_BOTTOM_PX = 48;
 
+// ---- 第 2 強化ラウンド: 遠景の展示構造（正本 §7.1b・§10）----
+/** 遠景の壁と床の境界線の高さ = 画面高 × この値 */
+export const BACKDROP_WALL_LINE_POSITION_RATIO = 0.22;
+/** 境界線の alpha（1px・静的層へ焼き付け） */
+export const BACKDROP_WALL_LINE_ALPHA = 0.025;
+/** 柱の気配の本数の範囲。幅がモバイル境界（MOBILE_BREAKPOINT_PX）以下なら MIN 本、超えると MAX 本 */
+export const BACKDROP_COLUMN_COUNT_MIN = 3;
+export const BACKDROP_COLUMN_COUNT_MAX = 4;
+/** 柱の帯の alpha（最手前の値。alpha 0.015 以下を正本とする）。奥の柱は FAR_FACTOR 倍まで薄くなる */
+export const BACKDROP_COLUMN_ALPHA = 0.015;
+/** 最奥の柱の alpha 倍率（最手前 = 1.0 からこの値へ直線的に落ちる） */
+export const BACKDROP_COLUMN_ALPHA_FAR_FACTOR = 0.55;
+/** 最手前の柱の帯の幅 = 短辺 × この値 */
+export const BACKDROP_COLUMN_WIDTH_RATIO = 0.045;
+/** 最奥の柱の幅の倍率（最手前 = 1.0 からこの値へ直線的に細る） */
+export const BACKDROP_COLUMN_WIDTH_FAR_FACTOR = 0.65;
+/** 柱の区間幅の幾何縮小率（透視風の間隔: 手前の区間が広く、奥へ 1 区間ごとにこの率で狭い） */
+export const BACKDROP_COLUMN_GAP_RATIO = 0.72;
+/** 柱をその区間のどこに置くか（0 = 区間の左端, 1 = 右端）。0.5 より大きいと奥側に寄る */
+export const BACKDROP_COLUMN_POSITION_BIAS = 0.55;
+
 // ---- 第 2 強化ラウンド: 時間変化（正本 art-direction 第 7 章・architecture §10）----
 /** 床の照りのドリフトの周期。斜めの帯がこの周期で床を線形に横切る */
 export const FLOOR_DRIFT_PERIOD_MS = 24000;

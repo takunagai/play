@@ -424,8 +424,12 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 | `CHAIN_DURATION_MAX_MS` | 16000 | 連鎖全体の上限（上の表で更新済み） |
 | `BACKDROP_WALL_LINE_POSITION_RATIO` | 0.22 | 遠景の壁と床の境界線の高さ = 画面高 × この値 |
 | `BACKDROP_WALL_LINE_ALPHA` | 0.025 | 境界線の alpha（1px・静的層へ焼き付け） |
-| `BACKDROP_COLUMN_COUNT_MIN` / `_MAX` | 3 / 4 | 柱の気配の本数 |
-| `BACKDROP_COLUMN_ALPHA` | 0.015 | 柱の帯の alpha 上限（静的層へ焼き付け） |
+| `BACKDROP_COLUMN_COUNT_MIN` / `_MAX` | 3 / 4 | 柱の気配の本数。幅 ≤ `MOBILE_BREAKPOINT_PX`（430px）で MIN、超えると MAX |
+| `BACKDROP_COLUMN_ALPHA` | 0.015 | 柱の帯の alpha（最手前の値。静的層へ焼き付け。奥は `BACKDROP_COLUMN_ALPHA_FAR_FACTOR` 0.55 倍まで直線的に薄くなる） |
+| `BACKDROP_COLUMN_ALPHA_FAR_FACTOR` | 0.55 | 最奥の柱の alpha 倍率（最手前 = 1.0 から直線補間） |
+| `BACKDROP_COLUMN_WIDTH_RATIO` / `_FAR_FACTOR` | 0.045 / 0.65 | 最手前の柱の幅 = 短辺 × この値。最奥は FAR_FACTOR 倍まで直線的に細る（透視の手前広/奥狭） |
+| `BACKDROP_COLUMN_GAP_RATIO` | 0.72 | 柱の区間幅の幾何縮小率。手前の区間が広く、奥へ 1 区間ごとにこの率で狭い（透視風の間隔） |
+| `BACKDROP_COLUMN_POSITION_BIAS` | 0.55 | 柱をその区間のどこに置くか（0 = 左端, 1 = 右端）。0.5 超は奥側寄せ |
 | `FLOOR_DRIFT_PERIOD_MS` | 24000 | 床の照りのドリフトの周期 |
 | `FLOOR_DRIFT_ALPHA_MAX` | 0.10 | ドリフト帯の alpha 上限（0.04 から引き上げ。理由と参考数値は `art-direction.md` §7.1: 0.04 では検証プローブで検出不能な水準のため、視認性確保で 0.10。帯の濃度は線形でなく raised cosine） |
 | `FLOOR_DRIFT_WIDTH_RATIO` | 0.3 | ドリフト帯の幅 = `min(w, h) × この値` |

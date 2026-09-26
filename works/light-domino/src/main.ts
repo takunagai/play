@@ -26,6 +26,16 @@ import { createAudioEngine } from "./audio/engine";
 import {
   AFTERGLOW_FADE_MS,
   AWAKEN_LIGHT_ALPHA,
+  BACKDROP_COLUMN_ALPHA,
+  BACKDROP_COLUMN_ALPHA_FAR_FACTOR,
+  BACKDROP_COLUMN_COUNT_MAX,
+  BACKDROP_COLUMN_COUNT_MIN,
+  BACKDROP_COLUMN_GAP_RATIO,
+  BACKDROP_COLUMN_POSITION_BIAS,
+  BACKDROP_COLUMN_WIDTH_FAR_FACTOR,
+  BACKDROP_COLUMN_WIDTH_RATIO,
+  BACKDROP_WALL_LINE_ALPHA,
+  BACKDROP_WALL_LINE_POSITION_RATIO,
   CHAIN_CONTRACT_ALPHA,
   CHAIN_CONTRACT_RADIUS_RATIO,
   CHAIN_CONTRACT_START_T,
@@ -463,6 +473,8 @@ new P5((p: P5) => {
   let floorGlowLayerKey = "";
   let gridLayer: HTMLCanvasElement | null = null;
   let vignetteLayer: HTMLCanvasElement | null = null;
+  /** 遠景の展示構造（壁と床の境界線 + 柱の気配。正本 §7.1b）。リサイズ時だけ焼き直す静的層 */
+  let backdropLayer: HTMLCanvasElement | null = null;
   /** 照りドリフト帯を焼いたスプライト（リサイズ時だけ再焼き。毎フレームは回転転画だけ。正本 §7.3 の 1 回焼き流儀） */
   let driftBandSprite: HTMLCanvasElement | null = null;
   /** 眠る光の円弧を焼いたスプライト（core = 中身, glow = 周辺光）。rAF 内で円弧を生成しないためのもの（正本 §3.1）。 */
@@ -611,6 +623,41 @@ new P5((p: P5) => {
     ctx.globalAlpha = 1;
   };
 
+  /** 遠景の展示構造（正本 §7.1b）を静的層へ 1 回焼く。リサイズ時だけ呼ぶ。
+   *  壁と床の境界線を画面上部 22% に warmWhite alpha 0.025・1px で 1 本、線の上に柱の気配を
+   *  3〜4 本（alpha 0.015 以下の縦の帯・透視風の手前広/奥狭）焼く。境界線より下（床側）には何も置かない。動かさない。 */
+  const repaintBackdropLayer = (): void => {
+    if (!backdropLayer) backdropLayer = document.createElement("canvas");
+    const ctx = ensureStaticLayer(backdropLayer, p.width, p.height);
+    if (!ctx) return;
+    const wallLineY = Math.round(p.height * BACKDROP_WALL_LINE_POSITION_RATIO);
+    const shortEdge = Math.min(p.width, p.height);
+    const columnCount = p.width <= MOBILE_BREAKPOINT_PX ? BACKDROP_COLUMN_COUNT_MIN : BACKDROP_COLUMN_COUNT_MAX;
+    // 帯の足元は壁線で打ち切り（§7.1b: 境界線より下には何も置かない）
+    const bandHeight = wallLineY;
+    ctx.fillStyle = PALETTE_TILE;
+    // 透視風の間隔: 区間幅を手前から BACKDROP_COLUMN_GAP_RATIO 倍ずつ幾何縮小し、残りを最奥の区間に残す。
+    // 柱は各区間の BACKDROP_COLUMN_POSITION_BIAS の位置に置く。手前の柱ほど広く濃く、奥ほど細く薄い
+    const gapWeights = Array.from({ length: columnCount }, (_, index) => Math.pow(BACKDROP_COLUMN_GAP_RATIO, index));
+    const weightSum = gapWeights.reduce((sum, weight) => sum + weight, 0);
+    const usableWidth = p.width - shortEdge * BACKDROP_COLUMN_WIDTH_RATIO * 0.5; // 最手前の柱が左端に食い込まない分の余白
+    let cursor = (p.width - usableWidth) * 0.5;
+    for (let index = 0; index < columnCount; index++) {
+      const depth = index / (columnCount - 1); // 0 = 最手前, 1 = 最奥
+      const width = Math.max(1, Math.round(shortEdge * BACKDROP_COLUMN_WIDTH_RATIO * (1 + (BACKDROP_COLUMN_WIDTH_FAR_FACTOR - 1) * depth)));
+      const alpha = BACKDROP_COLUMN_ALPHA * (1 + (BACKDROP_COLUMN_ALPHA_FAR_FACTOR - 1) * depth);
+      const segmentWidth = (usableWidth * gapWeights[index]) / weightSum;
+      const x = cursor + segmentWidth * BACKDROP_COLUMN_POSITION_BIAS;
+      cursor += segmentWidth;
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(Math.round(x - width / 2), 0, width, bandHeight);
+    }
+    // 壁と床の境界線: 1px・alpha 0.025。柱の上に 1 本（画面全面に渡す。線より下には何も焼かない）
+    ctx.globalAlpha = BACKDROP_WALL_LINE_ALPHA;
+    ctx.fillRect(0, wallLineY, p.width, 1);
+    ctx.globalAlpha = 1;
+  };
+
   /** 周辺減光を静的層へ 1 回焼く。リサイズ時だけ呼ぶ（正本 §7.3）。 */
   const repaintVignetteLayer = (): void => {
     if (!vignetteLayer) vignetteLayer = document.createElement("canvas");
@@ -692,6 +739,7 @@ new P5((p: P5) => {
   /** 静的層を現在のキャンバス寸法で焼き直す。setup とリサイズ時のみ呼ぶ。 */
   const repaintStaticLayers = (): void => {
     floorGlowLayerKey = "";
+    repaintBackdropLayer();
     repaintGridLayer();
     repaintVignetteLayer();
     buildDriftBandSprite();
@@ -1024,13 +1072,16 @@ new P5((p: P5) => {
     ctx.globalAlpha = 1;
     ctx.fillStyle = PALETTE_BACKGROUND;
     ctx.fillRect(0, 0, p.width, p.height);
+    // 遠景の展示構造（正本 §7.1b）: 壁と床の境界線 1 本 + 柱の気配 3〜4 本。静的層の 1 枚を転画するだけ。
+    // 常時ほぼ静止（ドリフト帯より後ろの層）。reduced-motion でも同一描画
+    if (backdropLayer) ctx.drawImage(backdropLayer, 0, 0);
     // 床の放射照り（L1）は静的層へ焼いた 1 枚を転画する。chain 中は中心・色温度・収縮が動くため鍵が変わった時だけ焼き直す
     // （正本 §7.3「床 4 層とガイド線は静的キャンバスへ 1 回描き、リサイズ時だけ再描き」/ §3.4・art-direction §7.3）。
     repaintFloorGlowLayer(chainProgress, contractAmount);
     ctx.globalAlpha = 1;
     if (floorGlowLayer) ctx.drawImage(floorGlowLayer, 0, 0);
     // 床の照りのドリフト（正本 art-direction §7.1・architecture §7.1 の 6）: 静的層の上・板の下。
-    // coolGlow の斜めの帯（alpha ≤ 0.04・帯幅 = min(w,h) × 約 0.3）が 24 秒周期で床を線形に横切る。
+    // coolGlow の斜めの帯（alpha ≤ 0.10・帯幅 = min(w,h) × 約 0.3・raised cosine の濃度）が 24 秒周期で床を線形に横切る。
     // 影の方向は変えず、L2 格子は動かさない。reduced-motion では位相を固定して帯は存在させる。
     // 60fps 予算: 帯はリサイズ時に焼いたスプライトの回転転画だけ（毎フレームのグラデ生成・全面塗りを避ける）
     if (driftBandSprite) {
