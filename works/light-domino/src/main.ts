@@ -403,14 +403,18 @@ new P5((p: P5) => {
     // 各 trail の節点数（交叉点には節点を置かない）
     const nodeCounts = trails.map((trail) => trail.crossing.reduce((sum, flag) => (flag ? sum : sum + 1), 0));
     // 正本 §7.2: 蓄積上限（節点 300）超過時は古い演奏から順に残光段階へ落とし、節点・蕊は減衰させて残す。
-    // 新しい演奏から 300 個ぶんを「確定直後」、あふれた古い trail を「残光段階」とする。
+    // 新しい演奏から 300 個ぶんを「確定直後」とし、あふれた残り（より古いすべて）を「残光段階」とする。
+    // 予算超過後に古い trail を「サイズが小さい」ことを理由に通常 alpha へ再採用しない ─ 通常段階は
+    // 新しい側の連続 suffix のみ（MF-2 修正: 非連続な再採用で古い演奏が点滅するのを防ぐ）。
     let nodeBudget = MAX_LIVE_NODES;
+    let budgetExhausted = false;
     const isAfterglow = new Array<boolean>(trails.length).fill(false);
     for (let index = trails.length - 1; index >= 0; index--) {
-      if (nodeCounts[index] <= nodeBudget) {
-        nodeBudget -= nodeCounts[index];
-      } else {
+      if (budgetExhausted || nodeCounts[index] > nodeBudget) {
         isAfterglow[index] = true;
+        budgetExhausted = true;
+      } else {
+        nodeBudget -= nodeCounts[index];
       }
     }
     trails.forEach((trail, trailIndex) => {
