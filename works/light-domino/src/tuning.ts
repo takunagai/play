@@ -34,8 +34,8 @@ export const TILE_THICKNESS_PX = 3;
 export const DOMINO_SPACING_RATIO = 0.035;
 export const DOMINO_SPACING_MIN_PX = 15;
 export const DOMINO_SPACING_MAX_PX = 25;
-/** 1 本の列の上限枚数 */
-export const MAX_DOMINOES = 180;
+/** 1 本の列の上限枚数（第 2 強化ラウンドで 180 → 400。正本 §10） */
+export const MAX_DOMINOES = 400;
 /** 有効な列の最小弧長（px）と最小枚数 */
 export const MIN_PATH_LENGTH_PX = 96;
 export const MIN_DOMINOES = 8;
@@ -58,12 +58,12 @@ export const ENDPOINT_FLASH_MS = 320;
 // ---- 連鎖 ----
 /** 先頭の板が倒れ始めるまでの遅延（ms） */
 export const CHAIN_FIRST_DELAY_MS = 80;
-/** 板間隔の始まりと終わり（ms）。easeInQuad で縮める */
-export const CHAIN_INTERVAL_START_MS = 190;
-export const CHAIN_INTERVAL_END_MS = 95;
-/** 列全体の連鎖時間の下限と上限（ms）。間隔を一様に伸縮して収める */
+/** 板間隔の始まりと終わり（ms）。easeInQuad で縮める（第 2 強化ラウンドで 190/95 → 200/70 に拡大） */
+export const CHAIN_INTERVAL_START_MS = 200;
+export const CHAIN_INTERVAL_END_MS = 70;
+/** 列全体の連鎖時間の下限と上限（ms）。間隔を一様に伸縮して収める（上限は第 2 強化ラウンドで 9000 → 16000） */
 export const CHAIN_DURATION_MIN_MS = 1400;
-export const CHAIN_DURATION_MAX_MS = 9000;
+export const CHAIN_DURATION_MAX_MS = 16000;
 /** 1 枚が倒れる見た目の時間（ms） */
 export const FALL_MS = 140;
 /** 倒れの回転角（rad。約 85 度） */
@@ -144,13 +144,18 @@ export const VIGNETTE_MID_ALPHA = 0.12;
 /** 周辺減光の外縁 alpha */
 export const VIGNETTE_EDGE_ALPHA = 0.68;
 
-// ---- 再設計: 板の物体表現 ----
-export const TILE_WIDTH_PX = 10;
-export const TILE_DEPTH_PX = 6;
-export const MOBILE_TILE_WIDTH_PX = 8;
-export const MOBILE_TILE_DEPTH_PX = 5;
-export const FALLEN_TILE_LENGTH_PX = 22;
-export const MOBILE_FALLEN_TILE_LENGTH_PX = 18;
+// ---- 再設計: 板の物体表現（数値は第 2 強化ラウンドで拡大。正本 §10・art-direction 第 2・5 章）----
+/** 立板の幅。1280px で 13px（第 2 強化ラウンドで 10 から拡大） */
+export const TILE_WIDTH_PX = 13;
+/** 立板の奥行。1280px で 7px（第 2 強化ラウンドで 6 から拡大） */
+export const TILE_DEPTH_PX = 7;
+/** モバイル（375px）の立板の幅と奥行（第 2 強化ラウンドで 8/5 → 9/6） */
+export const MOBILE_TILE_WIDTH_PX = 9;
+export const MOBILE_TILE_DEPTH_PX = 6;
+/** 倒れ後の板長。1280px で 32px（第 2 強化ラウンドで 22 から拡大） */
+export const FALLEN_TILE_LENGTH_PX = 32;
+/** モバイル（375px）の倒れ後の板長（第 2 強化ラウンドで 18 → 24） */
+export const MOBILE_FALLEN_TILE_LENGTH_PX = 24;
 export const PORTRAIT_SCALE = 1.2;
 export const TILE_SIDE_BAND_ALPHA = 0.35;
 export const TILE_OUTLINE_ALPHA = 0.25;
@@ -201,12 +206,14 @@ export const NODE_HALO_RADIUS_PX = 5;
 export const NODE_HALO_ALPHA = 0.3;
 export const MAX_LIVE_NODES = 300;
 export const FINALE_BLOOM_DELAY_MS = 200;
+/** legacy: 開花時間は FINALE_BLOOM_MS_BASE + FINALE_BLOOM_T_FACTOR × t の式へ置き換わり未参照（既存キー保持ルールにより残す） */
 export const FINALE_BLOOM_MS = 800;
 export const FINALE_BLOOM_CORE_WIDTH_PX = 3;
 /** 開花中の蕊（本体の描線）の alpha */
 export const FINALE_BLOOM_CORE_ALPHA = 0.92;
 export const FINALE_BLOOM_GLOW_ALPHA = 0.1;
 export const FINALE_BLOOM_GLOW_WIDTH_PX = 24;
+/** 衝撃波の最大半径比の基数（式は 0.4 + FINALE_SHOCKWAVE_T_FACTOR × t。正本 §3.5 の長さ比例） */
 export const FINALE_SHOCKWAVE_RADIUS_RATIO = 0.4;
 export const FINALE_SHOCKWAVE_ALPHA = 0.12;
 /** 着地パルスの塗りの alpha（正本 §3.4 の gold alpha 0.10） */
@@ -220,3 +227,28 @@ export const PARALLEL_VELOCITY_BOOST = 0.08;
 export const ACCUMULATION_VELOCITY_BOOST = 0.05;
 export const PARALLEL_RUN_MIN_GAP_PX = 6;
 export const IGNORE_BAND_BOTTOM_PX = 48;
+
+// ---- 第 2 強化ラウンド: 時間変化（正本 art-direction 第 7 章・architecture §10）----
+/** 床の照りのドリフトの周期。斜めの帯がこの周期で床を線形に横切る */
+export const FLOOR_DRIFT_PERIOD_MS = 24000;
+/** ドリフト帯の alpha 上限 */
+export const FLOOR_DRIFT_ALPHA_MAX = 0.04;
+/** ドリフト帯の幅 = min(w, h) × この値 */
+export const FLOOR_DRIFT_WIDTH_RATIO = 0.3;
+/** 星図の呼吸の alpha 範囲（確定節点が intro / settled 静置で脈動する） */
+export const NODE_BREATHE_ALPHA_MIN = 0.35;
+export const NODE_BREATHE_ALPHA_MAX = 0.5;
+/** 星図の呼吸の周期範囲（節点ごとに位相をずらす） */
+export const NODE_BREATHE_PERIOD_MIN_MS = 4000;
+export const NODE_BREATHE_PERIOD_MAX_MS = 7000;
+/** finale 前の収縮を始める連鎖進行率（最後の 15% で「息を吸う」） */
+export const CHAIN_CONTRACT_START_T = 0.85;
+/** 収縮後の照り半径比（FLOOR_GLOW_RADIUS_RATIO 0.55 から絞る） */
+export const CHAIN_CONTRACT_RADIUS_RATIO = 0.48;
+/** 収縮後の照り alpha（FLOOR_GLOW_ALPHA_END 0.8 から絞る） */
+export const CHAIN_CONTRACT_ALPHA = 0.85;
+/** 開花時間 = base + factor × t（t は §3.5 定義の連鎖進行率。最大 1600ms。FINALE_BLOOM_MS は式へ変更で legacy） */
+export const FINALE_BLOOM_MS_BASE = 800;
+export const FINALE_BLOOM_T_FACTOR = 800;
+/** 衝撃波の最大半径比の t 係数（0.4 + 0.15 × t、最大 0.55） */
+export const FINALE_SHOCKWAVE_T_FACTOR = 0.15;

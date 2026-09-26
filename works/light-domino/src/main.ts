@@ -26,6 +26,10 @@ import { createAudioEngine } from "./audio/engine";
 import {
   AFTERGLOW_FADE_MS,
   AWAKEN_LIGHT_ALPHA,
+  CHAIN_CONTRACT_ALPHA,
+  CHAIN_CONTRACT_RADIUS_RATIO,
+  CHAIN_CONTRACT_START_T,
+  CHAIN_DURATION_MAX_MS,
   CHAIN_LIGHT_RECENT_TILES,
   CHAIN_LIGHT_SLIDE_MS,
   COMMIT_RETRACE_MS,
@@ -49,9 +53,14 @@ import {
   FINALE_BLOOM_DELAY_MS,
   FINALE_BLOOM_GLOW_ALPHA,
   FINALE_BLOOM_GLOW_WIDTH_PX,
-  FINALE_BLOOM_MS,
+  FINALE_BLOOM_MS_BASE,
+  FINALE_BLOOM_T_FACTOR,
   FINALE_SHOCKWAVE_ALPHA,
   FINALE_SHOCKWAVE_RADIUS_RATIO,
+  FINALE_SHOCKWAVE_T_FACTOR,
+  FLOOR_DRIFT_ALPHA_MAX,
+  FLOOR_DRIFT_PERIOD_MS,
+  FLOOR_DRIFT_WIDTH_RATIO,
   FLOOR_GLOW_ALPHA_END,
   FLOOR_GLOW_ALPHA_START,
   FLOOR_GLOW_RADIUS_RATIO,
@@ -79,6 +88,10 @@ import {
   MOBILE_TILE_DEPTH_PX,
   MOBILE_TILE_WIDTH_PX,
   NODE_HALO_ALPHA,
+  NODE_BREATHE_ALPHA_MAX,
+  NODE_BREATHE_ALPHA_MIN,
+  NODE_BREATHE_PERIOD_MAX_MS,
+  NODE_BREATHE_PERIOD_MIN_MS,
   NODE_HALO_RADIUS_PX,
   NODE_RADIUS_PX,
   PALETTE_BACKGROUND,
@@ -176,6 +189,8 @@ interface Shockwave {
   x: number;
   y: number;
   bornAtMs: number;
+  /** 最大半径 = min(w, h) × この値。push 時に演奏の t で確定させる（正本 §3.5 の長さ比例） */
+  radiusRatio: number;
 }
 
 /** aligned の端以外を押した後、ドラッグ開始距離を超えるまで保持する入力 */
@@ -204,6 +219,8 @@ const gateEl = document.querySelector<HTMLDivElement>("#gate");
 const debugOverlayEl = document.querySelector<HTMLPreElement>("#debug-overlay");
 const isDebugMode = new URLSearchParams(location.search).has("debug");
 if (isDebugMode && debugOverlayEl) debugOverlayEl.hidden = false;
+/** reduced-motion 環境。照りドリフトの位相を固定して帯は存在させる（正本 art-direction §7.1） */
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let state: State = "intro";
 let lastAmp = 0;
@@ -226,6 +243,65 @@ let introFadeStartedMs: number | null = null;
 let endpointFlashAtMs: { start: number; end: number } | null = null;
 let pendingReplacement: PendingReplacement | null = null;
 let floorLightCenter: Vec2 = { x: 0.5, y: 0.5 };
+/**
+ * 直近の演奏の「連鎖進行率」t（正本 §3.5 定義。0 → 1。その演奏の連鎖が取り得る最大時間に対する進行率）。
+ * schedule がある間は毎フレーム更新し、finale・commit の演出（開花・衝撃波の長さ比例）に使う。
+ * schedule が無い間（chain 前に commit を待つ finale）は直前の演奏の値を保持する。短い演奏は 0 近くになる。
+ */
+let lastPerformanceRatio = 0;
+/** 星図の呼吸の凍結開始時刻。chain 中と確定までの finale 中に固定し、位相を保持したまま静止させる（正本 §3.4・§3.5） */
+let breatheFrozenAtMs: number | null = null;
+
+/** 節点の呼吸の位相・周期と現在の alpha 係数（点ごとにずらす。正本 art-direction §7.2） */
+interface NodeBreathe {
+  phase: number;
+  periodMs: number;
+  alpha: number;
+}
+
+/** trail ごとの呼吸パラメータのキャッシュ。trail の点列に決定的に割り当て、alpha だけ毎フレーム更新する */
+const nodeBreathes: (NodeBreathe[] | null)[] = [];
+
+/** trail の各節点の呼吸 alpha（相対値。NODE_BREATHE_ALPHA_MAX のとき 1）を計算して返す */
+function nodeBreathesFor(trailIndex: number, pointCount: number, atMs: number): readonly NodeBreathe[] {
+  let list = nodeBreathes[trailIndex];
+  if (!list || list.length !== pointCount) {
+    const span = NODE_BREATHE_PERIOD_MAX_MS - NODE_BREATHE_PERIOD_MIN_MS;
+    list = Array.from({ length: pointCount }, (_, index) => ({
+      phase: (((trailIndex * 0.73 + index * 2.399963) % 4) / 4) * Math.PI * 2,
+      periodMs: NODE_BREATHE_PERIOD_MIN_MS + (((trailIndex * 13 + index * 29) % 32) / 32) * span,
+      alpha: 1,
+    }));
+    nodeBreathes[trailIndex] = list;
+  }
+  for (const breath of list) {
+    const wave = 0.5 + 0.5 * Math.sin((atMs / breath.periodMs) * Math.PI * 2 + breath.phase);
+    breath.alpha =
+      (NODE_BREATHE_ALPHA_MIN + (NODE_BREATHE_ALPHA_MAX - NODE_BREATHE_ALPHA_MIN) * wave) / NODE_BREATHE_ALPHA_MAX;
+  }
+  return list;
+}
+
+/**
+ * 節点上限（MAX_LIVE_NODES）超過後の残光段階分類（正本 §7.2）。
+ * 新しい側から予算を消費し、あふれたより古い演奏を残光段階へ落とす。
+ * 予算超過後に古い trail を「サイズが小さい」ことを理由に通常 alpha へ再採用しない ─ 通常段階は
+ * 新しい側の連続 suffix のみ（MF-2 修正: 非連続な再採用で古い演奏が点滅するのを防ぐ）。
+ */
+function trailAfterglowFlags(nodeCounts: readonly number[]): boolean[] {
+  let nodeBudget = MAX_LIVE_NODES;
+  let budgetExhausted = false;
+  const isAfterglow = new Array<boolean>(nodeCounts.length).fill(false);
+  for (let index = nodeCounts.length - 1; index >= 0; index--) {
+    if (budgetExhausted || nodeCounts[index] > nodeBudget) {
+      isAfterglow[index] = true;
+      budgetExhausted = true;
+    } else {
+      nodeBudget -= nodeCounts[index];
+    }
+  }
+  return isAfterglow;
+}
 
 // リサイズで再構築するため正規化座標を保持する
 let normalizedStrokePoints: Vec2[] | null = null;
@@ -367,6 +443,8 @@ new P5((p: P5) => {
   let floorGlowLayerKey = "";
   let gridLayer: HTMLCanvasElement | null = null;
   let vignetteLayer: HTMLCanvasElement | null = null;
+  /** 照りドリフト帯を焼いたスプライト（リサイズ時だけ再焼き。毎フレームは回転転画だけ。正本 §7.3 の 1 回焼き流儀） */
+  let driftBandSprite: HTMLCanvasElement | null = null;
   /** 眠る光の円弧を焼いたスプライト（core = 中身, glow = 周辺光）。rAF 内で円弧を生成しないためのもの（正本 §3.1）。 */
   let sleepingLightSprites: { core: HTMLCanvasElement; glow: HTMLCanvasElement }[] = [];
 
@@ -391,9 +469,10 @@ new P5((p: P5) => {
     }
   };
 
-  /** 蕊と節点を永続する星図レイヤーへ焼き付ける。 */
+  /** 蕊と節点を永続する星図レイヤーへ焼き付ける。呼吸が有効なときだけ毎フレーム、それ以外は構造変化時のみ。 */
   const repaintTrailLayer = (): void => {
     if (!trailCanvas) return;
+    if (trails.length === 0) return;
     const trailCtx = trailCanvas.getContext("2d");
     if (!trailCtx) return;
     trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
@@ -403,20 +482,9 @@ new P5((p: P5) => {
     // 各 trail の節点数（交叉点には節点を置かない）
     const nodeCounts = trails.map((trail) => trail.crossing.reduce((sum, flag) => (flag ? sum : sum + 1), 0));
     // 正本 §7.2: 蓄積上限（節点 300）超過時は古い演奏から順に残光段階へ落とし、節点・蕊は減衰させて残す。
-    // 新しい演奏から 300 個ぶんを「確定直後」とし、あふれた残り（より古いすべて）を「残光段階」とする。
-    // 予算超過後に古い trail を「サイズが小さい」ことを理由に通常 alpha へ再採用しない ─ 通常段階は
-    // 新しい側の連続 suffix のみ（MF-2 修正: 非連続な再採用で古い演奏が点滅するのを防ぐ）。
-    let nodeBudget = MAX_LIVE_NODES;
-    let budgetExhausted = false;
-    const isAfterglow = new Array<boolean>(trails.length).fill(false);
-    for (let index = trails.length - 1; index >= 0; index--) {
-      if (budgetExhausted || nodeCounts[index] > nodeBudget) {
-        isAfterglow[index] = true;
-        budgetExhausted = true;
-      } else {
-        nodeBudget -= nodeCounts[index];
-      }
-    }
+    const isAfterglow = trailAfterglowFlags(nodeCounts);
+    // 星図の呼吸（正本 art-direction §7.2）。凍結中は固定時刻で位相を保持して静止する
+    const breatheAtMs = breatheFrozenAtMs ?? performance.now();
     trails.forEach((trail, trailIndex) => {
       // 正本 §7.2: 確定直後の蕊は alpha 1.0。残光段階では 0.5 に減衰して消さない。
       const coreAlpha = isAfterglow[trailIndex] ? TRAIL_CORE_ALPHA_AFTERGLOW : TRAIL_CORE_ALPHA_COMMIT;
@@ -430,18 +498,21 @@ new P5((p: P5) => {
         else trailCtx.lineTo(x, y);
       });
       trailCtx.stroke();
+      const breathes = nodeBreathesFor(trailIndex, trail.points.length, breatheAtMs);
       for (let index = 0; index < trail.points.length; index++) {
         const point = trail.points[index];
         if (trail.crossing[index]) continue;
         const x = point.x * p.width;
         const y = point.y * p.height;
         // 節点も蕊と同じ係数で減衰させる。ただし消すことはない（正本 §3.5「星図は消えない」）。
-        trailCtx.globalAlpha = NODE_HALO_ALPHA * coreAlpha;
+        // 呼吸は intro / settled 静置の alpha 0.35 → 0.5 を coreAlpha 側に掛けて合成する。
+        const breatheAlpha = NODE_HALO_ALPHA * coreAlpha * breathes[index].alpha;
+        trailCtx.globalAlpha = breatheAlpha;
         trailCtx.fillStyle = PALETTE_GOLD;
         trailCtx.beginPath();
         trailCtx.arc(x, y, NODE_HALO_RADIUS_PX, 0, Math.PI * 2);
         trailCtx.fill();
-        trailCtx.globalAlpha = coreAlpha;
+        trailCtx.globalAlpha = coreAlpha * breathes[index].alpha;
         trailCtx.beginPath();
         trailCtx.arc(x, y, NODE_RADIUS_PX, 0, Math.PI * 2);
         trailCtx.fill();
@@ -464,8 +535,8 @@ new P5((p: P5) => {
   };
 
   /** 床の放射照り（L1）を静的層へ 1 回焼く。chain 中は中心・色温度・alpha が動くため鍵が変わった時だけ焼き直す（正本 §7.3 / §3.4）。 */
-  const repaintFloorGlowLayer = (chainProgress: number): void => {
-    const key = `${p.width}x${p.height}:${floorLightCenter.x.toFixed(4)},${floorLightCenter.y.toFixed(4)}:${chainProgress.toFixed(4)}`;
+  const repaintFloorGlowLayer = (chainProgress: number, contractAmount: number): void => {
+    const key = `${p.width}x${p.height}:${floorLightCenter.x.toFixed(4)},${floorLightCenter.y.toFixed(4)}:${chainProgress.toFixed(4)}:${contractAmount.toFixed(4)}`;
     if (key === floorGlowLayerKey) return;
     floorGlowLayerKey = key;
     if (!floorGlowLayer) floorGlowLayer = document.createElement("canvas");
@@ -473,7 +544,10 @@ new P5((p: P5) => {
     if (!ctx) return;
     const floorX = floorLightCenter.x * p.width;
     const floorY = floorLightCenter.y * p.height;
-    const radius = Math.min(p.width, p.height) * FLOOR_GLOW_RADIUS_RATIO;
+    // finale 前の収縮（正本 art-direction §7.3）: t ≥ CHAIN_CONTRACT_START_T で半径比 0.55 → 0.48 へ絞る
+    const glowRadiusRatio = FLOOR_GLOW_RADIUS_RATIO +
+      (CHAIN_CONTRACT_RADIUS_RATIO - FLOOR_GLOW_RADIUS_RATIO) * contractAmount;
+    const radius = Math.min(p.width, p.height) * glowRadiusRatio;
     const mixChannel = (start: number, end: number, amount: number): number => Math.round(start + (end - start) * amount);
     const cool = { r: parseInt(PALETTE_COOL_GLOW.slice(1, 3), 16), g: parseInt(PALETTE_COOL_GLOW.slice(3, 5), 16), b: parseInt(PALETTE_COOL_GLOW.slice(5, 7), 16) };
     const warm = { r: parseInt(PALETTE_WARM_GLOW.slice(1, 3), 16), g: parseInt(PALETTE_WARM_GLOW.slice(3, 5), 16), b: parseInt(PALETTE_WARM_GLOW.slice(5, 7), 16) };
@@ -481,7 +555,9 @@ new P5((p: P5) => {
     const floorGlow = ctx.createRadialGradient(floorX, floorY, 0, floorX, floorY, Math.max(1, radius));
     floorGlow.addColorStop(0, glowColor);
     floorGlow.addColorStop(1, `${PALETTE_BACKGROUND}00`);
-    ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (FLOOR_GLOW_ALPHA_END - FLOOR_GLOW_ALPHA_START) * chainProgress;
+    // 収縮では alpha も 0.8 → 0.85 へ絞る（息を吸う。開花で contractAmount = 0 へ戻り解放する）
+    const glowAlphaEnd = FLOOR_GLOW_ALPHA_END + (CHAIN_CONTRACT_ALPHA - FLOOR_GLOW_ALPHA_END) * contractAmount;
+    ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (glowAlphaEnd - FLOOR_GLOW_ALPHA_START) * chainProgress;
     ctx.fillStyle = floorGlow;
     const portraitScaleY = p.height > p.width ? 4 / 3 : 1;
     ctx.save();
@@ -529,6 +605,33 @@ new P5((p: P5) => {
     ctx.fillRect(0, 0, p.width, p.height);
   };
 
+  /** 照りドリフト帯（coolGlow・alpha ≤ 0.04・帯幅 = min(w,h) × 0.3）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。 */
+  const buildDriftBandSprite = (): void => {
+    const shortEdge = Math.min(p.width, p.height);
+    const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
+    // 帯は 45 度で回転して転画するため、スプライトは正方形（一辺 = 帯幅の 1.5 倍。回転の丸めを吸収する）
+    const size = Math.max(2, Math.ceil(bandWidth * 1.5));
+    if (!driftBandSprite) driftBandSprite = document.createElement("canvas");
+    if (driftBandSprite.width !== size || driftBandSprite.height !== size) {
+      driftBandSprite.width = size;
+      driftBandSprite.height = size;
+    }
+    const ctx = driftBandSprite.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    const gradient = ctx.createLinearGradient(-bandWidth / 2, 0, bandWidth / 2, 0);
+    const midHex = Math.round(FLOOR_DRIFT_ALPHA_MAX * 255).toString(16).padStart(2, "0");
+    gradient.addColorStop(0, `${PALETTE_COOL_GLOW}00`);
+    gradient.addColorStop(0.5, `${PALETTE_COOL_GLOW}${midHex}`);
+    gradient.addColorStop(1, `${PALETTE_COOL_GLOW}00`);
+    ctx.save();
+    ctx.translate(size / 2, size / 2);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(-bandWidth / 2, -size / 2, bandWidth, size);
+    ctx.restore();
+  };
+
   /** 眠る光の円弧をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ（正本 §3.1: 毎フレームは位置を転画して alpha だけ掛ける）。 */
   const buildSleepingLightSprites = (): void => {
     if (sleepingLights.length === 0) return;
@@ -566,6 +669,7 @@ new P5((p: P5) => {
     floorGlowLayerKey = "";
     repaintGridLayer();
     repaintVignetteLayer();
+    buildDriftBandSprite();
     buildSleepingLightSprites();
   };
 
@@ -668,6 +772,11 @@ new P5((p: P5) => {
       };
     });
     schedule = audio.beginChain(chainEvents);
+    // 新しい演奏の t（§3.5 定義の連鎖進行率）をこの演奏の長さで初期化する
+    lastPerformanceRatio = Math.min(
+      1,
+      Math.max(0, (schedule.finaleAtMs - schedule.fallAtMs[0]) / CHAIN_DURATION_MAX_MS),
+    );
     settled.goldThrough = -1;
     finaleAtMs = null;
     setStage("chain");
@@ -686,11 +795,24 @@ new P5((p: P5) => {
       parallel: parallelFlags(pixelPoints, existingPixelPaths, PARALLEL_RUN_MIN_GAP_PX),
     });
     // 既存契約どおり trail の保持単位は最大 24。本数を超えても現在の星図は 24 本分残る。
-    if (trails.length > MAX_COMMITTED_TRAILS) trails.shift();
+    while (trails.length > MAX_COMMITTED_TRAILS) {
+      trails.shift();
+      // 呼吸キャッシュも同じ単位でずらす（trail index と nodeBreathes の対応を保つ）
+      nodeBreathes.shift();
+    }
     repaintTrailLayer();
 
     const endpoint = normalizedStrokePoints[normalizedStrokePoints.length - 1];
-    shockwaves.push({ x: endpoint.x * p.width, y: endpoint.y * p.height, bornAtMs: nowMs });
+    // 衝撃波の最大半径はその演奏の t で確定させる（正本 §3.5 の長さ比例。0.4 + 0.15t、最大 0.55）
+    shockwaves.push({
+      x: endpoint.x * p.width,
+      y: endpoint.y * p.height,
+      bornAtMs: nowMs,
+      radiusRatio: Math.min(
+        FINALE_SHOCKWAVE_RADIUS_RATIO + FINALE_SHOCKWAVE_T_FACTOR,
+        FINALE_SHOCKWAVE_RADIUS_RATIO + FINALE_SHOCKWAVE_T_FACTOR * lastPerformanceRatio,
+      ),
+    });
   };
 
   p.setup = () => {
@@ -836,6 +958,8 @@ new P5((p: P5) => {
         }
       }
       settled.goldThrough = next;
+      // 星図の呼吸の凍結（正本 §3.4・§3.5）: chain の開始で固定し、確定（settleAtMs）まで位相を保持する
+      if (breatheFrozenAtMs === null) breatheFrozenAtMs = nowMs;
       if (finaleAtMs === null && nowMs >= schedule.finaleAtMs) {
         finaleAtMs = schedule.finaleAtMs;
         setStage("finale");
@@ -846,6 +970,7 @@ new P5((p: P5) => {
         normalizedStrokePoints = null;
         schedule = null;
         chainEvents = [];
+        breatheFrozenAtMs = null; // 確定したので呼吸を再開（位相は凍結時刻から継続する）
         setStage("finale");
       }
     }
@@ -853,17 +978,40 @@ new P5((p: P5) => {
     const chainProgress = settled && schedule
       ? Math.max(0, settled.goldThrough + 1) / Math.max(1, settled.dominoes.length)
       : 0;
+    // finale 前の収縮（正本 art-direction §7.3）: 進行度 t ≥ 0.85 の最後の 15% で照りを絞る。
+    // 開花の開始（finaleAtMs 到達）で contractAmount を 0 へ戻して解放する
+    const contractAmount = settled && schedule && finaleAtMs === null
+      ? Math.max(0, Math.min(1, (chainProgress - CHAIN_CONTRACT_START_T) / (1 - CHAIN_CONTRACT_START_T)))
+      : 0;
 
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
     ctx.fillStyle = PALETTE_BACKGROUND;
     ctx.fillRect(0, 0, p.width, p.height);
-    // 床の放射照り（L1）は静的層へ焼いた 1 枚を転画する。chain 中は中心・色温度が動くため鍵が変わった時だけ焼き直す
-    // （正本 §7.3「床 4 層とガイド線は静的キャンバスへ 1 回描き、リサイズ時だけ再描き」/ §3.4）。
-    repaintFloorGlowLayer(chainProgress);
+    // 床の放射照り（L1）は静的層へ焼いた 1 枚を転画する。chain 中は中心・色温度・収縮が動くため鍵が変わった時だけ焼き直す
+    // （正本 §7.3「床 4 層とガイド線は静的キャンバスへ 1 回描き、リサイズ時だけ再描き」/ §3.4・art-direction §7.3）。
+    repaintFloorGlowLayer(chainProgress, contractAmount);
     ctx.globalAlpha = 1;
     if (floorGlowLayer) ctx.drawImage(floorGlowLayer, 0, 0);
+    // 床の照りのドリフト（正本 art-direction §7.1・architecture §7.1 の 6）: 静的層の上・板の下。
+    // coolGlow の斜めの帯（alpha ≤ 0.04・帯幅 = min(w,h) × 約 0.3）が 24 秒周期で床を線形に横切る。
+    // 影の方向は変えず、L2 格子は動かさない。reduced-motion では位相を固定して帯は存在させる。
+    // 60fps 予算: 帯はリサイズ時に焼いたスプライトの回転転画だけ（毎フレームのグラデ生成・全面塗りを避ける）
+    if (driftBandSprite) {
+      const shortEdge = Math.min(p.width, p.height);
+      const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
+      const span = p.width + p.height + bandWidth * 2;
+      const phase = prefersReducedMotion ? 0.25 : (nowMs % FLOOR_DRIFT_PERIOD_MS) / FLOOR_DRIFT_PERIOD_MS;
+      const travel = span * phase - bandWidth;
+      // 帯の中心線（x - y = travel の 45 度の直線）上にスプライト中心を置いて回転転画する
+      ctx.save();
+      ctx.translate(travel, 0);
+      ctx.rotate(Math.PI / 4);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(driftBandSprite, -driftBandSprite.width / 2, -driftBandSprite.height / 2);
+      ctx.restore();
+    }
     if (gridLayer) ctx.drawImage(gridLayer, 0, 0);
     ctx.restore();
 
@@ -903,6 +1051,11 @@ new P5((p: P5) => {
 
     // 周辺減光は静的層の 1 枚を転画するだけ（正本 §7.3）。
     if (vignetteLayer) ctx.drawImage(vignetteLayer, 0, 0);
+
+    // 星図の呼吸（正本 art-direction §7.2）: 呼吸が動く状態（chain / 確定前 finale を除く全状態）では
+    // trail レイヤーを毎フレーム焼き直す。凍結中（chain と確定前 finale）は焼き直さず転画だけ。
+    // trail が 1 本も無ければ焼く必要も無い。
+    if (trails.length > 0 && breatheFrozenAtMs === null) repaintTrailLayer();
 
     const introVisibility = introFadeStartedMs === null ? 1 : Math.max(0, 1 - (nowMs - introFadeStartedMs) / INTRO_FADE_MS);
     if (introVisibility > 0) {
@@ -1069,9 +1222,11 @@ new P5((p: P5) => {
     }
 
     if (finaleAtMs !== null && settled && normalizedStrokePoints) {
+      // 開花時間はその演奏の t に比例する（正本 §3.5 の長さ比例。800 + 800t ms、最大 1600ms）
+      const bloomDurationMs = FINALE_BLOOM_MS_BASE + FINALE_BLOOM_T_FACTOR * lastPerformanceRatio;
       const elapsed = nowMs - finaleAtMs - FINALE_BLOOM_DELAY_MS;
-      if (elapsed >= 0 && elapsed <= FINALE_BLOOM_MS) {
-        const bloom = Math.min(1, elapsed / FINALE_BLOOM_MS);
+      if (elapsed >= 0 && elapsed <= bloomDurationMs) {
+        const bloom = Math.min(1, elapsed / bloomDurationMs);
         glowGoldPath(
           normalizedStrokePoints,
           FINALE_BLOOM_GLOW_ALPHA * (0.65 + 0.35 * GLOW_PULSE_AMPLITUDE * lastAmp),
@@ -1105,7 +1260,7 @@ new P5((p: P5) => {
       ctx.strokeStyle = PALETTE_GOLD;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(shock.x, shock.y, Math.min(p.width, p.height) * FINALE_SHOCKWAVE_RADIUS_RATIO * progress, 0, Math.PI * 2);
+      ctx.arc(shock.x, shock.y, Math.min(p.width, p.height) * shock.radiusRatio * progress, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
