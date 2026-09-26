@@ -235,8 +235,8 @@ export const IGNORE_BAND_BOTTOM_PX = 48;
 // ---- 第 2 強化ラウンド: 時間変化（正本 art-direction 第 7 章・architecture §10）----
 /** 床の照りのドリフトの周期。斜めの帯がこの周期で床を線形に横切る */
 export const FLOOR_DRIFT_PERIOD_MS = 24000;
-/** ドリフト帯の alpha 上限 */
-export const FLOOR_DRIFT_ALPHA_MAX = 0.04;
+/** ドリフト帯の alpha 上限（0.04 から引き上げ。理由は art-direction.md §7.1） */
+export const FLOOR_DRIFT_ALPHA_MAX = 0.10;
 /** ドリフト帯の幅 = min(w, h) × この値 */
 export const FLOOR_DRIFT_WIDTH_RATIO = 0.3;
 /** 星図の呼吸の alpha 範囲（確定節点が intro / settled 静置で脈動する） */

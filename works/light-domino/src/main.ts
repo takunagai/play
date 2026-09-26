@@ -625,7 +625,7 @@ new P5((p: P5) => {
     ctx.fillRect(0, 0, p.width, p.height);
   };
 
-  /** 照りドリフト帯（coolGlow・alpha ≤ 0.04・帯幅 = min(w,h) × 0.3）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。 */
+  /** 照りドリフト帯（coolGlow・alpha ≤ 0.10・帯幅 = min(w,h) × 0.3・raised cosine の濃度）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。 */
   const buildDriftBandSprite = (): void => {
     const shortEdge = Math.min(p.width, p.height);
     const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
@@ -640,11 +640,16 @@ new P5((p: P5) => {
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, size, size);
+    // 濃度は raised cosine（正本 §7.1: 両端で勾配 0・中心で最大 = (1+cos(π·d))/2）。
+    // canvas の線形グラデは stop 間を直線補間するため、半帯 8 分割の colorStop で近似する
     const gradient = ctx.createLinearGradient(-bandWidth / 2, 0, bandWidth / 2, 0);
-    const midHex = Math.round(FLOOR_DRIFT_ALPHA_MAX * 255).toString(16).padStart(2, "0");
-    gradient.addColorStop(0, `${PALETTE_COOL_GLOW}00`);
-    gradient.addColorStop(0.5, `${PALETTE_COOL_GLOW}${midHex}`);
-    gradient.addColorStop(1, `${PALETTE_COOL_GLOW}00`);
+    for (let i = 0; i <= 16; i++) {
+      const d = Math.abs(i / 16 - 0.5) * 2; // 0 = 帯の中心（stop 0.5）, 1 = 帯の端（stop 0 と 1）
+      const alphaHex = Math.round(FLOOR_DRIFT_ALPHA_MAX * (1 + Math.cos(Math.PI * d)) / 2 * 255)
+        .toString(16)
+        .padStart(2, "0");
+      gradient.addColorStop(i / 16, `${PALETTE_COOL_GLOW}${alphaHex}`);
+    }
     ctx.save();
     ctx.translate(size / 2, size / 2);
     ctx.fillStyle = gradient;
