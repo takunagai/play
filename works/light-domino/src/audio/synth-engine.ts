@@ -1,13 +1,14 @@
 // ============================================================
 // synth-engine.ts ─ Web Audio によるマリンバ／カリンバと終演和音
 // 配線: placeClick / domino → transientBus ─┐
-//       finaleBass / finaleChord ───────────┼→ fxIn → dry / Convolver(生成 IR) → Compressor → master → Analyser → destination
+//       chainSub / finaleBass / finaleChord ─┼→ fxIn → dry / Convolver(生成 IR) → Compressor → master → Analyser → destination
 //                                           └→ hushDuck は transientBus のみ
 // 音声ファイル・外部 CDN は使わない。正本は docs/architecture.md 第 5〜6 節。
 // ============================================================
 
 import { computeChainSchedule, type AudioEngine, type ChainEvent, type ChainSchedule } from "./engine";
-import { midiToFrequency } from "../music";
+import { midiToFrequency, PITCH_MIDIS } from "../music";
+import { CHAIN_DURATION_MAX_MS } from "../tuning";
 import {
   ALIGN_CLICK_DECAY_SECONDS,
   ALIGN_CLICK_FREQ_HZ,
@@ -15,6 +16,10 @@ import {
   BUSY_DUCK_MAX_DB,
   BUSY_VOICE_THRESHOLD,
   BUSY_WINDOW_MS,
+  CHAIN_SUB_BASE_GAIN,
+  CHAIN_SUB_BASE_MIDI,
+  CHAIN_SUB_BASE_OCTAVE_GAIN,
+  CHAIN_SUB_BASE_RELEASE_SECONDS,
   COMPRESSOR_RATIO,
   COMPRESSOR_THRESHOLD_DB,
   DOMINO_GAIN,
@@ -23,7 +28,9 @@ import {
   FINALE_BASS_GAIN,
   FINALE_BASS_OCTAVE_GAIN,
   FINALE_CHORD_BRIGHT_SECONDS,
+  FINALE_CHORD_DECAY_MAX_SECONDS,
   FINALE_CHORD_DECAY_SECONDS,
+  FINALE_CHORD_DECAY_T_FACTOR,
   FINALE_CHORD_GAIN,
   FINALE_CHORD_SINE_GAIN,
   FINALE_CHORD_SPREAD,
@@ -36,7 +43,6 @@ import {
   MASTER_GAIN,
   MAX_VOICES,
   PLACE_CLICK_DECAY_SECONDS,
-  PLACE_CLICK_FREQ_HZ,
   PLACE_CLICK_GAIN,
   PLACE_MIN_INTERVAL_MS,
   REVERB_SECONDS,
@@ -153,13 +159,20 @@ export class SynthAudioEngine implements AudioEngine {
 
   // ---- 契約の実装 ----
 
-  place(x: number, _y: number): void {
+  place(x: number, y: number): void {
     const now = performance.now();
     if (now - this.lastPlaceAtMs < PLACE_MIN_INTERVAL_MS) return; // 発音だけ間引く（視覚は間引かない）
     this.lastPlaceAtMs = now;
-    // 900Hz の短いサイン + ごく短いノイズの木製クリック
-    this.playClick(PLACE_CLICK_FREQ_HZ, PLACE_CLICK_GAIN, PLACE_CLICK_DECAY_SECONDS, x);
+    // 置いた板の音階度（上ほど高音）の短いサイン + ごく短いノイズの木製クリック。描線が旋律として聴こえる
+    this.playClick(this.placeClickFrequency(y), PLACE_CLICK_GAIN, PLACE_CLICK_DECAY_SECONDS, x);
     this.playMalletNoise(PLACE_CLICK_GAIN * 0.6, MALLET_NOISE_SECONDS, x);
+  }
+
+  /** placeClick のピッチ。置いた板の高さ（正規化 y の上下反転）を既存の C メジャーペンタ割り当てへ写す（正本 §6） */
+  private placeClickFrequency(normalizedY: number): number {
+    const clamped = Math.min(1, Math.max(0, normalizedY));
+    const index = Math.round((1 - clamped) * (PITCH_MIDIS.length - 1));
+    return midiToFrequency(PITCH_MIDIS[index]);
   }
 
   align(_tileCount: number): void {
@@ -179,6 +192,12 @@ export class SynthAudioEngine implements AudioEngine {
 
     const ctxOf = (scheduleMs: number): number => audioNowSeconds + (scheduleMs - nowMs) / 1000;
 
+    // この演奏の連鎖進行率 t（正本 §3.5。開花・衝撃波・サブベース・和音の減衰が共有する値）
+    const performanceRatio = Math.min(
+      1,
+      Math.max(0, (schedule.finaleAtMs - schedule.fallAtMs[0]) / CHAIN_DURATION_MAX_MS),
+    );
+
     events.forEach((event, index) => {
       const isLast = index === events.length - 1;
       if (isLast) return; // 最後の 1 枚は終演和音へ置き換える
@@ -186,6 +205,13 @@ export class SynthAudioEngine implements AudioEngine {
       // 最後から 1 枚前の減衰を早める（「間」の前に音を引く）
       this.scheduleDomino(event, ctxOf(schedule.fallAtMs[index]), isSecondLast ? 0.4 : 1, index / Math.max(1, events.length - 1));
     });
+
+    // 連鎖中のサブベース: C2 サイン（+ C3 倍音）が連鎖進行率 t でフェードインし、
+    // hush 開始で素早くフェードアウトして終演ベースへ解消する（正本 §6）。
+    // 終演音と同じ fxIn 経由なので、hush の transientBus ダックの対象外（打音だけを引く）。
+    // transientBus 輻輳時に makeRoom が最古の通常音を奪う既存機構は、この voice も
+    // isFinale: false の通常音として管理するため、新しい sub も同一のダック機構で守られる。
+    this.scheduleChainSub(ctxOf(schedule.fallAtMs[0]), ctxOf(schedule.hushAtMs), performanceRatio);
 
     // hush: transientBus を 80ms で -12dB、finale で 180ms かけて戻す
     if (this.transientBus) {
@@ -197,14 +223,55 @@ export class SynthAudioEngine implements AudioEngine {
       bus.exponentialRampToValueAtTime(1, ctxOf(schedule.finaleAtMs) + HUSH_RECOVER_SECONDS);
     }
 
-    // 終演: 低音 + 和音を finaleAtMs に揃える
-    this.scheduleFinale(ctxOf(schedule.finaleAtMs), events[events.length - 1]);
+    // 終演: 低音 + 和音を finaleAtMs に揃える（和音の減衰は t 比例で伸びる）
+    this.scheduleFinale(ctxOf(schedule.finaleAtMs), events[events.length - 1], performanceRatio);
     // 進行済みの音を後からまとめて鳴らさないため、hush 以降の grant はここまで
     this.pruneVoices(context.currentTime);
     return schedule;
   }
 
   // ---- 音源 ----
+
+  /**
+   * 連鎖中のサブベース。C2 サイン（+ C3 倍音。終演ベースと同じ音色系）を fromSeconds に立ち上げ、
+   * 連鎖進行率 t で gain 0 → CHAIN_SUB_BASE_GAIN へフェードインし、hush 開始で素早く引く（正本 §6）。
+   * bus は終演と同じ fxIn ─ hush の transientBus ダックは打音バス限定のため sub は引かれない。
+   */
+  private scheduleChainSub(fromSeconds: number, hushSeconds: number, performanceRatio: number): void {
+    const context = this.context;
+    const bus = this.fxIn;
+    if (!context || !bus) return;
+    if (!this.makeRoom(fromSeconds, context)) return;
+
+    const voice = context.createGain();
+    voice.connect(bus);
+    const frequencies = [midiToFrequency(CHAIN_SUB_BASE_MIDI), midiToFrequency(CHAIN_SUB_BASE_MIDI + 12)];
+    const octaveGains = [1, CHAIN_SUB_BASE_OCTAVE_GAIN];
+    const nodes: OscillatorNode[] = [];
+    frequencies.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine"; // サブは純粋なサインで床の重みを支える
+      oscillator.frequency.value = frequency;
+      const peak = CHAIN_SUB_BASE_GAIN * octaveGains[index];
+      gain.gain.setValueAtTime(0.0001, fromSeconds);
+      gain.gain.linearRampToValueAtTime(Math.max(peak * performanceRatio, 0.0001), hushSeconds);
+      gain.gain.exponentialRampToValueAtTime(0.0001, hushSeconds + CHAIN_SUB_BASE_RELEASE_SECONDS);
+      oscillator.connect(gain).connect(voice);
+      oscillator.start(fromSeconds);
+      oscillator.stop(hushSeconds + CHAIN_SUB_BASE_RELEASE_SECONDS + 0.05);
+      nodes.push(oscillator);
+    });
+
+    const stopAtSeconds = hushSeconds + CHAIN_SUB_BASE_RELEASE_SECONDS + 0.1;
+    this.voices.push({ gain: voice, startsAtSeconds: fromSeconds, stopAtSeconds, isFinale: false });
+    const cleanupAtMs = (stopAtSeconds - context.currentTime) * 1000;
+    window.setTimeout(() => {
+      for (const node of nodes) node.disconnect();
+      voice.disconnect();
+      this.voices = this.voices.filter((entry) => entry.gain !== voice);
+    }, Math.max(0, cleanupAtMs));
+  }
 
   private busyDuckLinear(atSeconds: number): number {
     const windowSeconds = BUSY_WINDOW_MS / 1000;
@@ -381,12 +448,17 @@ export class SynthAudioEngine implements AudioEngine {
     }, Math.max(0, cleanupAtMs));
   }
 
-  /** 終演: 低音（C2 + C3）と和音（C4/E4/G4/A4）を atSeconds に揃えて鳴らす */
-  private scheduleFinale(atSeconds: number, lastEvent: ChainEvent): void {
+  /** 終演: 低音（C2 + C3）と和音（C4/E4/G4/A4）を atSeconds に揃えて鳴らす。和音の減衰は t 比例（4.8 + 1.7t 秒、max 6.5s） */
+  private scheduleFinale(atSeconds: number, lastEvent: ChainEvent, performanceRatio: number): void {
     const context = this.context;
     const bus = this.fxIn;
     if (!context || !bus) return;
     if (!this.makeRoom(atSeconds, context)) return;
+    // 解放の比例: 長い演奏（t 大）ほど和音の余韻が長く伸びる（正本 §6）
+    const chordDecaySeconds = Math.min(
+      FINALE_CHORD_DECAY_MAX_SECONDS,
+      FINALE_CHORD_DECAY_SECONDS + FINALE_CHORD_DECAY_T_FACTOR * performanceRatio,
+    );
 
     // 低音: C2 + 小音量の C3（小型スピーカーでも低音の存在が分かるように）
     const bass = context.createGain();
@@ -427,10 +499,10 @@ export class SynthAudioEngine implements AudioEngine {
       toneGain.gain.exponentialRampToValueAtTime(FINALE_CHORD_GAIN, atSeconds + 0.012);
       // 最初の 500ms は明るく、そこから減衰曲線へ落とす
       toneGain.gain.exponentialRampToValueAtTime(FINALE_CHORD_GAIN * 0.5, atSeconds + FINALE_CHORD_BRIGHT_SECONDS);
-      toneGain.gain.exponentialRampToValueAtTime(0.0001, atSeconds + FINALE_CHORD_DECAY_SECONDS);
+      toneGain.gain.exponentialRampToValueAtTime(0.0001, atSeconds + chordDecaySeconds);
       tone.connect(toneGain).connect(panner);
       tone.start(atSeconds);
-      tone.stop(atSeconds + FINALE_CHORD_DECAY_SECONDS + 0.1);
+      tone.stop(atSeconds + chordDecaySeconds + 0.1);
 
       const sine = context.createOscillator();
       const sineGain = context.createGain();
@@ -438,10 +510,10 @@ export class SynthAudioEngine implements AudioEngine {
       sine.frequency.value = frequency;
       sineGain.gain.setValueAtTime(0.0001, atSeconds);
       sineGain.gain.exponentialRampToValueAtTime(FINALE_CHORD_GAIN * FINALE_CHORD_SINE_GAIN, atSeconds + 0.02);
-      sineGain.gain.exponentialRampToValueAtTime(0.0001, atSeconds + FINALE_CHORD_DECAY_SECONDS * 0.8);
+      sineGain.gain.exponentialRampToValueAtTime(0.0001, atSeconds + chordDecaySeconds * 0.8);
       sine.connect(sineGain).connect(panner);
       sine.start(atSeconds);
-      sine.stop(atSeconds + FINALE_CHORD_DECAY_SECONDS + 0.1);
+      sine.stop(atSeconds + chordDecaySeconds + 0.1);
       chordNodes.push({ osc: tone, gain: toneGain, pan: panner });
       chordNodes.push({ osc: sine, gain: sineGain, pan: panner });
     });
@@ -454,7 +526,7 @@ export class SynthAudioEngine implements AudioEngine {
       this.wet.gain.linearRampToValueAtTime(wetNow + REVERB_WET_LATE, atSeconds + 0.4);
     }
 
-    const stopAtSeconds = atSeconds + FINALE_CHORD_DECAY_SECONDS + 0.2;
+    const stopAtSeconds = atSeconds + chordDecaySeconds + 0.2;
     this.voices.push({ gain: chord, startsAtSeconds: atSeconds, stopAtSeconds, isFinale: true });
     const cleanupAtMs = (stopAtSeconds - context.currentTime) * 1000;
     window.setTimeout(() => {

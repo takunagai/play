@@ -59,6 +59,8 @@ import {
   CHAIN_INTERVAL_START_MS,
   FALL_MS,
   FINALE_SETTLE_MS,
+  HUSH_LONG_CHAIN_MIN_TILES,
+  PREFINALE_HUSH_LONG_MS,
   PREFINALE_HUSH_MS,
 } from "../tuning";
 
@@ -68,7 +70,8 @@ import {
  *
  * 時刻の定義:
  * - fallAtMs[i]: 板 i の倒れ始め（音の予約もここ）
- * - hushAtMs = fallAtMs[n-1] + FALL_MS - PREFINALE_HUSH_MS（最後の板の着地の 160ms 前）
+ * - hushAtMs: 最後の板の着地の「間」の直前（正本 §3.4。HUSH_LONG_CHAIN_MIN_TILES 枚以上の
+ *   連鎖では PREFINALE_HUSH_LONG_MS、未満では PREFINALE_HUSH_MS。音と視覚が同じ式で揃う）
  * - finaleAtMs = fallAtMs[n-1] + FALL_MS（最後の板の着地）
  */
 export function computeChainSchedule(events: readonly ChainEvent[], nowMs: number): ChainSchedule {
@@ -82,7 +85,8 @@ export function computeChainSchedule(events: readonly ChainEvent[], nowMs: numbe
   ).map((offset) => nowMs + offset);
   const lastFall = fallAtMs[fallAtMs.length - 1] ?? nowMs;
   const finaleAtMs = lastFall + FALL_MS;
-  const hushAtMs = Math.max(nowMs, finaleAtMs - PREFINALE_HUSH_MS);
+  const hushMs = events.length >= HUSH_LONG_CHAIN_MIN_TILES ? PREFINALE_HUSH_LONG_MS : PREFINALE_HUSH_MS;
+  const hushAtMs = Math.max(nowMs, finaleAtMs - hushMs);
   return {
     fallAtMs,
     hushAtMs,

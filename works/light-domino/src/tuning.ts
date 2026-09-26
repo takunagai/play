@@ -58,7 +58,7 @@ export const ENDPOINT_FLASH_MS = 320;
 // ---- 連鎖 ----
 /** 先頭の板が倒れ始めるまでの遅延（ms） */
 export const CHAIN_FIRST_DELAY_MS = 80;
-/** 板間隔の始まりと終わり（ms）。easeInQuad で縮める（第 2 強化ラウンドで 190/95 → 200/70 に拡大） */
+/** 板間隔の始まりと終わり（ms）。easeInCubic で縮める（第 2 強化ラウンドで 190/95 → 200/70 に拡大し、加速曲線を easeInQuad → easeInCubic へ変更） */
 export const CHAIN_INTERVAL_START_MS = 200;
 export const CHAIN_INTERVAL_END_MS = 70;
 /** 列全体の連鎖時間の下限と上限（ms）。間隔を一様に伸縮して収める（上限は第 2 強化ラウンドで 9000 → 16000） */
@@ -68,8 +68,12 @@ export const CHAIN_DURATION_MAX_MS = 16000;
 export const FALL_MS = 140;
 /** 倒れの回転角（rad。約 85 度） */
 export const FALL_ANGLE_RAD = 1.48;
-/** 最後の 1 枚前で音を引く「間」（ms）。最優先の調整点 */
+/** 最後の 1 枚前で音を引く「間」（ms）。最優先の調整点。HUSH_LONG_CHAIN_MIN_TILES 枚以上の連鎖では PREFINALE_HUSH_LONG_MS を使う */
 export const PREFINALE_HUSH_MS = 160;
+/** 「間」を 220ms へ伸ばす連鎖の最小枚数（正本 §3.4。短い演奏のテンポを殺さない） */
+export const HUSH_LONG_CHAIN_MIN_TILES = 120;
+/** 長い連鎖（HUSH_LONG_CHAIN_MIN_TILES 枚以上）の「間」（ms）。第 2 強化ラウンドで緊張を溜める */
+export const PREFINALE_HUSH_LONG_MS = 220;
 
 // ---- 終演 ----
 /** 道全体の発光の立ち上がり時間（ms） */

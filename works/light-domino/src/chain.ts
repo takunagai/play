@@ -4,12 +4,12 @@
 // ============================================================
 
 /**
- * 板間隔（ms）。190ms → 95ms へ easeInQuad で縮める。
+ * 板間隔（ms）。200ms → 70ms へ easeInCubic で縮める（第 2 強化ラウンド）。
  * progress は 0..1（列の始端からの割合）。
  */
 export function intervalMs(progress: number, startMs: number, endMs: number): number {
   const clamped = Math.min(1, Math.max(0, progress));
-  const eased = clamped * clamped; // easeInQuad
+  const eased = clamped * clamped * clamped; // easeInCubic（終盤の加速の伸びを強調する）
   return startMs + (endMs - startMs) * eased;
 }
 
