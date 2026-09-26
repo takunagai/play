@@ -10,7 +10,7 @@ import type { Bubble } from "../bubbles";
 import { CREATURE_SPECS } from "../creatures";
 import type { CreaturePose } from "../creatures";
 import type { BackgroundBlob } from "../field";
-import { CREATURE_OPACITY, MAX_BUBBLES, PALETTE_BASE } from "../tuning";
+import { CREATURE_GLOW_ADD, CREATURE_GLOW_OPACITY_BOOST, CREATURE_OPACITY, MAX_BUBBLES, PALETTE_BASE } from "../tuning";
 
 const VERTEX_SOURCE = `#version 300 es
 void main() {
@@ -33,6 +33,8 @@ precision highp float;
 #define CREATURE_COUNT ${CREATURE_COUNT}
 #define ATLAS_COLUMNS ${ATLAS_COLUMNS}
 #define ATLAS_ROWS ${ATLAS_ROWS}
+#define CREATURE_GLOW_OPACITY_BOOST ${CREATURE_GLOW_OPACITY_BOOST.toFixed(4)}
+#define CREATURE_GLOW_ADD ${CREATURE_GLOW_ADD.toFixed(4)}
 
 uniform vec2 uResolution;
 uniform float uTime;
@@ -51,6 +53,8 @@ uniform float uBubbleSeed[BUBBLE_COUNT];
 // 浮遊生物: xy = 中心、zw = 半辺（z が負なら左右反転）。いずれも描画 px
 uniform vec4 uCreatureXform[CREATURE_COUNT];
 uniform float uCreatureRotation[CREATURE_COUNT];
+// x = visibility（0 なら描かない）、y = 驚いたときの光 0..1
+uniform vec2 uCreatureLight[CREATURE_COUNT];
 uniform float uCreatureOpacity; // 0 のときはアトラス未読み込み（描かない）
 uniform float uAtlasCellPx;
 uniform sampler2D uCreatureAtlas; // プリマルチプライド α
@@ -76,6 +80,8 @@ vec3 evalBackground(vec2 p) {
 vec3 addCreatures(vec3 color, vec2 p) {
   if (uCreatureOpacity <= 0.0) return color;
   for (int i = 0; i < CREATURE_COUNT; i++) {
+    vec2 light = uCreatureLight[i];
+    if (light.x <= 0.0) continue;
     vec4 xform = uCreatureXform[i];
     vec2 d = p - xform.xy;
     float extent = max(abs(xform.z), abs(xform.w)) * 1.42;
@@ -88,7 +94,9 @@ vec3 addCreatures(vec3 color, vec2 p) {
     vec2 uv = (cell + q * 0.5 + 0.5) / vec2(float(ATLAS_COLUMNS), float(ATLAS_ROWS));
     float lod = max(0.0, log2(uAtlasCellPx / (2.0 * abs(xform.w))));
     vec4 texel = textureLod(uCreatureAtlas, uv, lod);
-    color = color * (1.0 - texel.a * uCreatureOpacity) + texel.rgb * uCreatureOpacity;
+    // 光: 不透明度の上乗せ + 加算（creatures2d.ts と同じ式）
+    float opacity = min(1.0, uCreatureOpacity * (1.0 + light.y * CREATURE_GLOW_OPACITY_BOOST));
+    color = color * (1.0 - texel.a * opacity) + texel.rgb * opacity + texel.rgb * min(1.0, light.y * CREATURE_GLOW_ADD);
   }
   return color;
 }
@@ -116,7 +124,8 @@ vec3 interferenceColor(float thicknessNm, float cosT) {
 
 void main() {
   vec2 fragPixel = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
-  vec3 color = evalScene(fragPixel);
+  vec3 scene = evalScene(fragPixel);
+  vec3 color = scene;
 
   for (int i = 0; i < BUBBLE_COUNT; i++) {
     float baseRadius = uBubbleRadius[i];
@@ -146,9 +155,11 @@ void main() {
     // 映り込む環境光: 上が明るい空、下は背景色の照り返し
     vec3 environment = mix(evalBackground(fragPixel) * 1.6 + 0.08, vec3(0.92, 0.95, 1.0), 0.5 - 0.5 * u.y);
 
-    // 屈折: 薄い膜なので縁の近くだけわずかに歪む
+    // 屈折: 薄い膜なので縁の近くだけわずかに歪む。
+    // 奥に見えるのは「ここまでに描いた色」（先に描いた泡を含む）とし、背景・生き物のずれだけを差分で足す。
+    // 背景だけを評価し直すと、重なった奥の泡が手前の泡の内側で消えて不透明に見える
     vec2 normal2d = dist > 0.001 ? delta / dist : vec2(0.0);
-    vec3 refracted = evalScene(fragPixel - normal2d * radius * 0.06 * r * r);
+    vec3 refracted = max(color + evalScene(fragPixel - normal2d * radius * 0.06 * r * r) - scene, 0.0);
 
     float reflectance = fresnel * 1.5 + 0.05 + uAmp * 0.08;
     vec3 bubbleColor = refracted * (1.0 - min(0.8, fresnel)) + film * environment * reflectance;
@@ -206,6 +217,7 @@ interface Uniforms {
   bubbleSeed: WebGLUniformLocation | null;
   creatureXform: WebGLUniformLocation | null;
   creatureRotation: WebGLUniformLocation | null;
+  creatureLight: WebGLUniformLocation | null;
   creatureOpacity: WebGLUniformLocation | null;
   atlasCellPx: WebGLUniformLocation | null;
   creatureAtlas: WebGLUniformLocation | null;
@@ -239,6 +251,7 @@ export class RichGLRenderer {
   private readonly blobColorBuf = new Float32Array(BLOB_COUNT * 3);
   private readonly creatureXformBuf = new Float32Array(CREATURE_COUNT * 4);
   private readonly creatureRotationBuf = new Float32Array(CREATURE_COUNT);
+  private readonly creatureLightBuf = new Float32Array(CREATURE_COUNT * 2);
   private hasCreatureAtlas = false;
 
   private readonly onContextLost = (event: Event): void => {
@@ -298,6 +311,7 @@ export class RichGLRenderer {
         bubbleSeed: gl.getUniformLocation(program, "uBubbleSeed"),
         creatureXform: gl.getUniformLocation(program, "uCreatureXform"),
         creatureRotation: gl.getUniformLocation(program, "uCreatureRotation"),
+        creatureLight: gl.getUniformLocation(program, "uCreatureLight"),
         creatureOpacity: gl.getUniformLocation(program, "uCreatureOpacity"),
         atlasCellPx: gl.getUniformLocation(program, "uAtlasCellPx"),
         creatureAtlas: gl.getUniformLocation(program, "uCreatureAtlas"),
@@ -407,9 +421,12 @@ export class RichGLRenderer {
         this.creatureXformBuf[i * 4 + 2] = pose.halfWidth * scale;
         this.creatureXformBuf[i * 4 + 3] = pose.halfHeight * scale;
         this.creatureRotationBuf[i] = pose.rotation;
+        this.creatureLightBuf[i * 2] = pose.visibility;
+        this.creatureLightBuf[i * 2 + 1] = pose.glow;
       }
       gl.uniform4fv(uniforms.creatureXform, this.creatureXformBuf);
       gl.uniform1fv(uniforms.creatureRotation, this.creatureRotationBuf);
+      gl.uniform2fv(uniforms.creatureLight, this.creatureLightBuf);
     }
 
     gl.viewport(0, 0, pixelWidth, pixelHeight);

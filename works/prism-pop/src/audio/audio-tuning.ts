@@ -37,6 +37,8 @@ export const AMP_RELEASE_PER_FRAME = 0.9;
 
 /** 同時発音の上限。超えたら最も古い声を奪う */
 export const MAX_VOICES = 28;
+/** タイトルへ戻るとき（stopAll）に鳴っている声を消すフェード秒。短いと途切れた感じ、長いと余韻が残る */
+export const STOP_ALL_FADE_SECONDS = 0.35;
 /** コンテキストが止まっている間（解錠前など）に溜めてよい声の数。解錠時の音の塊を防ぐ */
 export const SUSPENDED_MAX_VOICES = 4;
 /** 声を奪うときのフェード秒。短いとプチッと鳴り、長いと重なりが残る */
@@ -169,6 +171,102 @@ export const MISS_DECAY_SECONDS = 0.06;
 export const MISS_LOWPASS_HZ = 1200;
 /** 空振り音の音量（VOICE_GAIN に掛ける） */
 export const MISS_GAIN = 0.35;
+
+// ---- creature*（浮遊生物を驚かせたときの効果音） --------------------
+// 音程のある音はすべて F リディアンの構成音（MIDI）。周波数 Hz で書いた値は音程感の薄い効果音の成分
+
+/** 生き物の効果音の音量（VOICE_GAIN に掛ける）。泡の pop より控えめにする */
+export const CREATURE_GAIN = 0.55;
+
+/** エイ: 翼の風切り（下降するバンドパスノイズ）を 2 回 + 柔らかいマリンバ */
+export const CREATURE_RAY_WHOOSH_FROM_HZ = 1800;
+export const CREATURE_RAY_WHOOSH_TO_HZ = 450;
+export const CREATURE_RAY_WHOOSH_SECONDS = 0.4;
+/** 2 回目の羽ばたきまでの秒 */
+export const CREATURE_RAY_WHOOSH_GAP_SECONDS = 0.3;
+export const CREATURE_RAY_WHOOSH_GAIN = 0.9;
+export const CREATURE_RAY_MIDI = 60; // C4
+export const CREATURE_RAY_TONE_WEIGHT = 0.45;
+
+/** クリオネ: 短いベル 2 音（上昇）+ 上昇サインの「ピッ」 */
+export const CREATURE_CLIONE_MIDIS = [84, 89] as const; // C6, F6
+export const CREATURE_CLIONE_STEP_SECONDS = 0.07;
+export const CREATURE_CLIONE_DECAY_SCALE = 0.3;
+export const CREATURE_CLIONE_BELL_WEIGHT = 0.6;
+export const CREATURE_CLIONE_CHIRP_FROM_HZ = 1200;
+export const CREATURE_CLIONE_CHIRP_TO_HZ = 2400;
+export const CREATURE_CLIONE_CHIRP_GAIN = 0.25;
+
+/** クシクラゲ: 高音ベルの速いアルペジオ（ガラスのきらめき）。1 音ごとに pan を左右へ振る */
+export const CREATURE_CTENOPHORE_MIDIS = [89, 93, 96, 100] as const; // F6, A6, C7, E7
+export const CREATURE_CTENOPHORE_STEP_SECONDS = 0.03;
+export const CREATURE_CTENOPHORE_DECAY_SCALE = 0.5;
+export const CREATURE_CTENOPHORE_BELL_WEIGHT = 0.35;
+export const CREATURE_CTENOPHORE_BRIGHTNESS = 1.2;
+export const CREATURE_CTENOPHORE_PAN_SPREAD = 0.25;
+
+/** グラスオクトパス: 下降サインの「ポコッ」2 回 + ローパスノイズの噴射 */
+export const CREATURE_OCTOPUS_BLOOPS = [
+  { delay: 0, fromHz: 520, toHz: 180, gain: 0.8 },
+  { delay: 0.11, fromHz: 420, toHz: 180, gain: 0.5 },
+] as const;
+export const CREATURE_OCTOPUS_BLOOP_GLIDE_SECONDS = 0.16;
+export const CREATURE_OCTOPUS_BLOOP_DECAY_SECONDS = 0.22;
+export const CREATURE_OCTOPUS_JET_FROM_HZ = 900;
+export const CREATURE_OCTOPUS_JET_TO_HZ = 200;
+export const CREATURE_OCTOPUS_JET_SECONDS = 0.35;
+export const CREATURE_OCTOPUS_JET_GAIN = 0.5;
+
+/** リーフィーシードラゴン: 高域の短いノイズを不規則に並べたカサカサ + ミュートしたマリンバ */
+export const CREATURE_SEADRAGON_RUSTLE_COUNT = 5;
+export const CREATURE_SEADRAGON_RUSTLE_SPREAD_SECONDS = 0.25;
+export const CREATURE_SEADRAGON_RUSTLE_MIN_HZ = 3000;
+export const CREATURE_SEADRAGON_RUSTLE_MAX_HZ = 4500;
+export const CREATURE_SEADRAGON_RUSTLE_GAIN = 0.8;
+export const CREATURE_SEADRAGON_MIDI = 69; // A4
+export const CREATURE_SEADRAGON_TONE_DECAY_SCALE = 0.35;
+export const CREATURE_SEADRAGON_TONE_WEIGHT = 0.6;
+
+/** クラゲ: ビブラート付きの柔らかい上昇サイン「ぽよん」を傘の拍動に合わせて 2 回 */
+export const CREATURE_JELLYFISH_FROM_MIDI = 69; // A4
+export const CREATURE_JELLYFISH_TO_MIDI = 72; // C5
+export const CREATURE_JELLYFISH_GLIDE_SECONDS = 0.12;
+export const CREATURE_JELLYFISH_ATTACK_SECONDS = 0.03;
+export const CREATURE_JELLYFISH_DECAY_SECONDS = 0.45;
+export const CREATURE_JELLYFISH_VIBRATO_HZ = 7;
+export const CREATURE_JELLYFISH_VIBRATO_CENTS = 35;
+/** 2 回目までの秒（creatures.ts のクラゲの flapHz 2.3 の 1 周期） */
+export const CREATURE_JELLYFISH_GAP_SECONDS = 0.435;
+export const CREATURE_JELLYFISH_GAINS = [0.7, 0.45] as const;
+
+// ---- プリズムストーム（stormRise / stormPad / stormFinale） -----------
+
+/** 開始の上昇グリッサンド: 開始音（MIDI）、オクターブ数（+ level、上限あり）、音の間隔秒、音量 */
+export const STORM_RISE_START_MIDI = 65; // F4
+/** 上昇に使う和声音（主音からの半音。1-3-5-#4-7、昇順に並べ替えて使う） */
+export const STORM_RISE_CHORD_SEMITONES = [0, 4, 7, 6, 11] as const;
+export const STORM_RISE_OCTAVES = 2;
+export const STORM_RISE_MAX_EXTRA_OCTAVES = 1;
+export const STORM_RISE_STEP_SECONDS = 0.028;
+export const STORM_RISE_GAIN = 0.55;
+export const STORM_RISE_PAN_WIDTH = 0.8;
+/** パッドの膨らみ: ピーク音量・立ち上がり秒・終了後の減衰の時定数秒 */
+export const STORM_PAD_GAIN = 0.14;
+export const STORM_PAD_ATTACK_SECONDS = 1.2;
+export const STORM_PAD_RELEASE_SECONDS = 1.6;
+/** 締め: 主和音（主音からの半音）、開始音、オクターブ数（level ごとに下へ 1 オクターブ、上限あり）、かき鳴らす間隔秒、音量、減衰の伸び */
+export const STORM_FINALE_CHORD_SEMITONES = [0, 4, 7, 11] as const; // 1-3-5-7
+export const STORM_FINALE_START_MIDI = 65; // F4
+export const STORM_FINALE_OCTAVES = 3;
+export const STORM_FINALE_MAX_EXTRA_OCTAVES = 1;
+export const STORM_FINALE_STEP_SECONDS = 0.022;
+export const STORM_FINALE_GAIN = 0.55;
+export const STORM_FINALE_DECAY_SCALE = 1.6;
+/** 締めの低い主音（marimba）の MIDI と音量 */
+export const STORM_FINALE_BASS_MIDI = 53; // F3
+export const STORM_FINALE_BASS_GAIN = 0.8;
+/** これより上の音は鳴らさない（music.ts の LADDER_TOP_MIDI と揃える） */
+export const STORM_TOP_MIDI = 100;
 
 // ---- milestoneGliss ------------------------------------------------
 

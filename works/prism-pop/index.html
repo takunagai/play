@@ -5,6 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Prism Pop</title>
+    <!-- ホーム画面に追加して開いたとき、ブラウザ枠なしで起動する（iPhone は全画面 API が無いため、この経路で全画面にする） -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <meta name="theme-color" content="#0d0a1f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Prism Pop" />
   </head>
   <body>
     <div id="stage">
@@ -17,7 +25,47 @@
     <div id="gate" aria-hidden="true">
       <h1 id="gate-title">Prism Pop</h1>
       <p id="gate-text">触れて、はじけさせて</p>
+      <p id="gate-prompt"><span class="prompt-mouse">Click to Start</span><span class="prompt-touch">Tap to Start</span></p>
     </div>
+    <button id="exit-button" class="corner-button" type="button" aria-label="タイトルに戻る" title="タイトルに戻る（Esc）" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      <!-- 縁の進捗リング: 次のプリズムストームまでの進み具合（1 周 = 1000 個）。pathLength=1 で dashoffset を 0..1 で扱う -->
+      <svg class="storm-ring" viewBox="0 0 44 44" aria-hidden="true">
+        <defs>
+          <linearGradient id="storm-ring-gradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#c6ff00" />
+            <stop offset="0.3" stop-color="#3dffb8" />
+            <stop offset="0.55" stop-color="#5cc8ff" />
+            <stop offset="0.8" stop-color="#7c4dff" />
+            <stop offset="1" stop-color="#ff5ce1" />
+          </linearGradient>
+        </defs>
+        <circle class="storm-ring-arc" cx="22" cy="22" r="21" pathLength="1" />
+      </svg>
+    </button>
+    <!-- 全画面の切り替え（全画面 API が使えない端末・ホーム画面から起動したときは main.ts が隠す） -->
+    <button id="fullscreen-button" class="corner-button" type="button" aria-label="全画面にする" title="全画面にする" hidden>
+      <svg class="icon-enter" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+      <svg class="icon-exit" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
+    </button>
+    <button id="help-button" class="corner-button" type="button" aria-label="遊び方" title="遊び方" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 8.8a3.5 3.5 0 1 1 4.9 3.2c-.9.4-1.4 1.2-1.4 2.2v.6M12 19v.01" /></svg>
+    </button>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="help-body">
+        <h2 id="help-title">遊び方</h2>
+        <ul class="help-list">
+          <li>泡に触れると、はじけて音が鳴る。大きい泡は低く、小さい泡は高く響く</li>
+          <li>押したまま・指を置いたままなぞると、通り道の泡をまとめて割れる</li>
+          <li>続けて割るとコンボになり、音が駆け上がって和音が積み上がる。手を止めると余韻が残る</li>
+          <li>コンボ 8 ごとにプリズムバースト ─ 虹の輪が広がり、周りの泡が連鎖してはじける</li>
+          <li>生き物に触れると反応する</li>
+          <li>右上の ×（または Esc）でタイトルに戻る</li>
+        </ul>
+        <p class="help-note">スコアも時間制限もない。好きなだけ鳴らして。<br />たくさん割り続けると、何かが起きるかも</p>
+        <button id="help-close" type="button">閉じる</button>
+      </div>
+    </dialog>
     <pre id="debug-overlay" hidden></pre>
     <script type="module" src="/src/main.ts"></script>
   </body>

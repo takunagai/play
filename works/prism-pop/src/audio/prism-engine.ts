@@ -7,7 +7,7 @@
 // （値の import にすると循環 import で TDZ になる）
 // ============================================================
 
-import type { AudioEngine, PopEvent } from "./engine";
+import type { AudioEngine, CreatureEvent, PopEvent } from "./engine";
 import { midiToFrequency, milestoneGlissando, ROOT_MIDI } from "../music";
 import * as Tuning from "./audio-tuning";
 
@@ -144,6 +144,58 @@ export class PrismAudioEngine implements AudioEngine {
       this.playMiss(x);
     } catch (error) {
       this.recordError("miss", error);
+    }
+  }
+
+  stormStart(level: number, durationSeconds: number): void {
+    if (!this.canPlay()) return;
+    try {
+      this.playStormStart(level, durationSeconds);
+    } catch (error) {
+      this.recordError("stormStart", error);
+    }
+  }
+
+  stormFinale(level: number): void {
+    if (!this.canPlay()) return;
+    try {
+      this.playStormFinale(level);
+    } catch (error) {
+      this.recordError("stormFinale", error);
+    }
+  }
+
+  stopAll(): void {
+    if (!this.canPlay()) return;
+    try {
+      const isRunning = this.isRunning();
+      for (const voice of [...this.activeVoices]) {
+        if (voice.isReleasing) continue;
+        // 止まっている間は時間が進まずフェードが終わらないので即座に切る
+        if (isRunning) {
+          this.releaseVoice(voice, Tuning.STOP_ALL_FADE_SECONDS);
+        } else {
+          this.disposeVoice(voice, true);
+        }
+      }
+      const padSwellGain = this.padSwellGain;
+      if (padSwellGain !== null && isRunning) {
+        const now = this.requireContext().currentTime;
+        holdParam(padSwellGain.gain, now);
+        padSwellGain.gain.linearRampToValueAtTime(0, now + Tuning.STOP_ALL_FADE_SECONDS);
+      }
+      this.recentPopTimes.length = 0;
+    } catch (error) {
+      this.recordError("stopAll", error);
+    }
+  }
+
+  creature(event: CreatureEvent): void {
+    if (!this.canPlay()) return;
+    try {
+      this.playCreature(event);
+    } catch (error) {
+      this.recordError("creature", error);
     }
   }
 
@@ -663,6 +715,318 @@ export class PrismAudioEngine implements AudioEngine {
     this.finishVoice(voice);
   }
 
+  /** プリズムストーム開始: 和声音の階段を駆け上がるベル + パッドを持続時間いっぱい膨らませる（6 節 stormRise / stormPad） */
+  private playStormStart(level: number, durationSeconds: number): void {
+    const context = this.requireContext();
+    const now = context.currentTime;
+    const safeLevel = Math.max(1, Math.floor(finiteOr(level, 1)));
+    const octaves = Tuning.STORM_RISE_OCTAVES + Math.min(safeLevel - 1, Tuning.STORM_RISE_MAX_EXTRA_OCTAVES);
+    const notes = chordLadder(Tuning.STORM_RISE_START_MIDI, Tuning.STORM_RISE_CHORD_SEMITONES, octaves);
+    notes.forEach((midi, index) => {
+      const startTime = now + index * Tuning.STORM_RISE_STEP_SECONDS;
+      // 左右に往復させる
+      const pan = Math.sin(index * 0.9) * Tuning.STORM_RISE_PAN_WIDTH;
+      const voice = this.createVoice(startTime, pan);
+      voice.output.gain.value = Tuning.VOICE_GAIN * Tuning.STORM_RISE_GAIN;
+      this.addBell(voice, { startTime, frequency: midiToFrequency(midi), weight: 1, decayScale: 0.8, brightness: 1 });
+      this.finishVoice(voice);
+    });
+
+    const padSwellGain = this.padSwellGain;
+    if (padSwellGain !== null) {
+      const holdSeconds = Math.max(Tuning.STORM_PAD_ATTACK_SECONDS, finiteOr(durationSeconds, 12));
+      holdParam(padSwellGain.gain, now);
+      padSwellGain.gain.linearRampToValueAtTime(Tuning.STORM_PAD_GAIN, now + Tuning.STORM_PAD_ATTACK_SECONDS);
+      padSwellGain.gain.setValueAtTime(Tuning.STORM_PAD_GAIN, now + holdSeconds);
+      padSwellGain.gain.setTargetAtTime(0, now + holdSeconds, Tuning.STORM_PAD_RELEASE_SECONDS);
+    }
+  }
+
+  /** プリズムストームの締め: 主和音をかき鳴らすベル + 低い主音のマリンバ（6 節 stormFinale） */
+  private playStormFinale(level: number): void {
+    const context = this.requireContext();
+    const now = context.currentTime;
+    const safeLevel = Math.max(1, Math.floor(finiteOr(level, 1)));
+    // 上は STORM_TOP_MIDI で頭打ちなので、回を追うごとに下へ 1 オクターブ広げる
+    const extraOctaves = Math.min(safeLevel - 1, Tuning.STORM_FINALE_MAX_EXTRA_OCTAVES);
+    const notes = chordLadder(
+      Tuning.STORM_FINALE_START_MIDI - 12 * extraOctaves,
+      Tuning.STORM_FINALE_CHORD_SEMITONES,
+      Tuning.STORM_FINALE_OCTAVES + extraOctaves,
+    );
+    const decayScale = Tuning.STORM_FINALE_DECAY_SCALE * (1 + 0.1 * Math.min(safeLevel - 1, 4));
+    notes.forEach((midi, index) => {
+      const startTime = now + index * Tuning.STORM_FINALE_STEP_SECONDS;
+      const progress = notes.length > 1 ? index / (notes.length - 1) : 0.5;
+      const voice = this.createVoice(startTime, (2 * progress - 1) * Tuning.MILESTONE_PAN_WIDTH);
+      voice.output.gain.value = Tuning.VOICE_GAIN * Tuning.STORM_FINALE_GAIN;
+      this.addBell(voice, { startTime, frequency: midiToFrequency(midi), weight: 1, decayScale, brightness: 1 });
+      this.finishVoice(voice);
+    });
+
+    const bass = this.createVoice(now, 0);
+    bass.output.gain.value = Tuning.VOICE_GAIN * Tuning.STORM_FINALE_BASS_GAIN;
+    this.addMarimba(bass, {
+      startTime: now,
+      frequency: midiToFrequency(Tuning.STORM_FINALE_BASS_MIDI),
+      midi: Tuning.STORM_FINALE_BASS_MIDI,
+      weight: 1,
+      decayScale: 1.6,
+      brightness: 1,
+      fundamentalDecayScale: 1,
+    });
+    this.finishVoice(bass);
+  }
+
+  /** 浮遊生物を驚かせたときの種類ごとの効果音（architecture.md 6 節 creature*） */
+  private playCreature(event: CreatureEvent): void {
+    const context = this.requireContext();
+    const startTime = context.currentTime;
+    const pan = panForX(clampUnit(finiteOr(event.x, 0.5)));
+
+    // クシクラゲは 1 音ごとに定位を散らすので声を分ける
+    if (event.species === "ctenophore") {
+      Tuning.CREATURE_CTENOPHORE_MIDIS.forEach((midi, index) => {
+        const noteStart = startTime + index * Tuning.CREATURE_CTENOPHORE_STEP_SECONDS;
+        const spread = (index % 2 === 0 ? -1 : 1) * Tuning.CREATURE_CTENOPHORE_PAN_SPREAD;
+        const voice = this.createVoice(noteStart, pan + spread);
+        voice.output.gain.value = Tuning.VOICE_GAIN * Tuning.CREATURE_GAIN;
+        this.addBell(voice, {
+          startTime: noteStart,
+          frequency: midiToFrequency(midi),
+          weight: Tuning.CREATURE_CTENOPHORE_BELL_WEIGHT,
+          decayScale: Tuning.CREATURE_CTENOPHORE_DECAY_SCALE,
+          brightness: Tuning.CREATURE_CTENOPHORE_BRIGHTNESS,
+        });
+        this.finishVoice(voice);
+      });
+      return;
+    }
+
+    const voice = this.createVoice(startTime, pan);
+    voice.output.gain.value = Tuning.VOICE_GAIN * Tuning.CREATURE_GAIN;
+    switch (event.species) {
+      case "ray":
+        this.addRaySound(voice, startTime);
+        break;
+      case "clione":
+        this.addClioneSound(voice, startTime);
+        break;
+      case "octopus":
+        this.addOctopusSound(voice, startTime);
+        break;
+      case "seadragon":
+        this.addSeadragonSound(voice, startTime);
+        break;
+      case "jellyfish":
+        this.addJellyfishSound(voice, startTime);
+        break;
+    }
+    this.finishVoice(voice);
+  }
+
+  /** エイ: 翼の風切り 2 回 + 柔らかいマリンバ */
+  private addRaySound(voice: Voice, startTime: number): void {
+    for (let beat = 0; beat < 2; beat++) {
+      this.addNoiseSweep(voice, {
+        startTime: startTime + beat * Tuning.CREATURE_RAY_WHOOSH_GAP_SECONDS,
+        duration: Tuning.CREATURE_RAY_WHOOSH_SECONDS,
+        fromHz: Tuning.CREATURE_RAY_WHOOSH_FROM_HZ,
+        toHz: Tuning.CREATURE_RAY_WHOOSH_TO_HZ,
+        q: 1.4,
+        peak: Tuning.CREATURE_RAY_WHOOSH_GAIN * (beat === 0 ? 1 : 0.7),
+        attack: 0.08,
+        filterType: "bandpass",
+      });
+    }
+    this.addMarimba(voice, {
+      startTime,
+      frequency: midiToFrequency(Tuning.CREATURE_RAY_MIDI),
+      midi: Tuning.CREATURE_RAY_MIDI,
+      weight: Tuning.CREATURE_RAY_TONE_WEIGHT,
+      decayScale: 0.8,
+      brightness: 0.6,
+      fundamentalDecayScale: 1,
+    });
+  }
+
+  /** クリオネ: 短いベル 2 音の上昇 + 「ピッ」 */
+  private addClioneSound(voice: Voice, startTime: number): void {
+    Tuning.CREATURE_CLIONE_MIDIS.forEach((midi, index) => {
+      this.addBell(voice, {
+        startTime: startTime + index * Tuning.CREATURE_CLIONE_STEP_SECONDS,
+        frequency: midiToFrequency(midi),
+        weight: Tuning.CREATURE_CLIONE_BELL_WEIGHT,
+        decayScale: Tuning.CREATURE_CLIONE_DECAY_SCALE,
+        brightness: 0.8,
+      });
+    });
+    this.addGlide(voice, {
+      startTime,
+      fromHz: Tuning.CREATURE_CLIONE_CHIRP_FROM_HZ,
+      toHz: Tuning.CREATURE_CLIONE_CHIRP_TO_HZ,
+      glideSeconds: 0.06,
+      peak: Tuning.CREATURE_CLIONE_CHIRP_GAIN,
+      attack: 0.004,
+      decay: 0.08,
+    });
+  }
+
+  /** グラスオクトパス: 「ポコッ」2 回 + 噴射 */
+  private addOctopusSound(voice: Voice, startTime: number): void {
+    for (const bloop of Tuning.CREATURE_OCTOPUS_BLOOPS) {
+      this.addGlide(voice, {
+        startTime: startTime + bloop.delay,
+        fromHz: bloop.fromHz,
+        toHz: bloop.toHz,
+        glideSeconds: Tuning.CREATURE_OCTOPUS_BLOOP_GLIDE_SECONDS,
+        peak: bloop.gain,
+        attack: 0.005,
+        decay: Tuning.CREATURE_OCTOPUS_BLOOP_DECAY_SECONDS,
+      });
+    }
+    this.addNoiseSweep(voice, {
+      startTime,
+      duration: Tuning.CREATURE_OCTOPUS_JET_SECONDS,
+      fromHz: Tuning.CREATURE_OCTOPUS_JET_FROM_HZ,
+      toHz: Tuning.CREATURE_OCTOPUS_JET_TO_HZ,
+      q: 0.7,
+      peak: Tuning.CREATURE_OCTOPUS_JET_GAIN,
+      attack: 0.02,
+      filterType: "lowpass",
+    });
+  }
+
+  /** リーフィーシードラゴン: 不規則なカサカサ + ミュートしたマリンバ */
+  private addSeadragonSound(voice: Voice, startTime: number): void {
+    for (let index = 0; index < Tuning.CREATURE_SEADRAGON_RUSTLE_COUNT; index++) {
+      this.addNoiseBurst(voice, {
+        startTime: startTime + Math.random() * Tuning.CREATURE_SEADRAGON_RUSTLE_SPREAD_SECONDS,
+        duration: 0.015 + Math.random() * 0.015,
+        centerFrequency:
+          Tuning.CREATURE_SEADRAGON_RUSTLE_MIN_HZ +
+          Math.random() * (Tuning.CREATURE_SEADRAGON_RUSTLE_MAX_HZ - Tuning.CREATURE_SEADRAGON_RUSTLE_MIN_HZ),
+        q: 2,
+        peak: Tuning.CREATURE_SEADRAGON_RUSTLE_GAIN * (0.6 + 0.4 * Math.random()),
+        filterType: "bandpass",
+      });
+    }
+    this.addMarimba(voice, {
+      startTime,
+      frequency: midiToFrequency(Tuning.CREATURE_SEADRAGON_MIDI),
+      midi: Tuning.CREATURE_SEADRAGON_MIDI,
+      weight: Tuning.CREATURE_SEADRAGON_TONE_WEIGHT,
+      decayScale: Tuning.CREATURE_SEADRAGON_TONE_DECAY_SCALE,
+      brightness: 1,
+      fundamentalDecayScale: 1,
+    });
+  }
+
+  /** クラゲ: 揺れる柔らかい上昇サイン「ぽよん」を 2 回 */
+  private addJellyfishSound(voice: Voice, startTime: number): void {
+    Tuning.CREATURE_JELLYFISH_GAINS.forEach((gain, index) => {
+      this.addGlide(voice, {
+        startTime: startTime + index * Tuning.CREATURE_JELLYFISH_GAP_SECONDS,
+        fromHz: midiToFrequency(Tuning.CREATURE_JELLYFISH_FROM_MIDI),
+        toHz: midiToFrequency(Tuning.CREATURE_JELLYFISH_TO_MIDI),
+        glideSeconds: Tuning.CREATURE_JELLYFISH_GLIDE_SECONDS,
+        peak: gain,
+        attack: Tuning.CREATURE_JELLYFISH_ATTACK_SECONDS,
+        decay: Tuning.CREATURE_JELLYFISH_DECAY_SECONDS,
+        vibratoHz: Tuning.CREATURE_JELLYFISH_VIBRATO_HZ,
+        vibratoCents: Tuning.CREATURE_JELLYFISH_VIBRATO_CENTS,
+      });
+    });
+  }
+
+  /** 周波数が滑らかに動くサイン 1 本（指数カーブで移動）。任意でビブラートをかける */
+  private addGlide(
+    voice: Voice,
+    options: {
+      startTime: number;
+      fromHz: number;
+      toHz: number;
+      glideSeconds: number;
+      peak: number;
+      attack: number;
+      decay: number;
+      vibratoHz?: number;
+      vibratoCents?: number;
+    },
+  ): void {
+    const context = this.requireContext();
+    const { startTime, fromHz, toHz, glideSeconds, peak, attack, decay } = options;
+    const oscillator = context.createOscillator();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(fromHz, startTime);
+    oscillator.frequency.exponentialRampToValueAtTime(toHz, startTime + glideSeconds);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(peak, startTime + attack);
+    gain.gain.exponentialRampToValueAtTime(Tuning.MIN_GAIN, startTime + attack + decay);
+    oscillator.connect(gain);
+    gain.connect(voice.input);
+    const stopTime = startTime + attack + decay + SOURCE_TAIL_SECONDS;
+    oscillator.start(startTime);
+    oscillator.stop(stopTime);
+    voice.nodes.push(oscillator, gain);
+    voice.sources.push({ node: oscillator, stopTime });
+
+    const vibratoCents = options.vibratoCents ?? 0;
+    if (vibratoCents <= 0) return;
+    const vibrato = context.createOscillator();
+    vibrato.frequency.value = options.vibratoHz ?? Tuning.BELL_VIBRATO_HZ;
+    const depth = context.createGain();
+    depth.gain.value = vibratoCents;
+    vibrato.connect(depth);
+    depth.connect(oscillator.detune);
+    vibrato.start(startTime);
+    vibrato.stop(stopTime);
+    voice.nodes.push(vibrato, depth);
+    voice.sources.push({ node: vibrato, stopTime });
+  }
+
+  /** フィルタの周波数が動く帯域ノイズ（風切り・噴射）。共有ノイズをループさせて長さの制約を外す */
+  private addNoiseSweep(
+    voice: Voice,
+    options: {
+      startTime: number;
+      duration: number;
+      fromHz: number;
+      toHz: number;
+      q: number;
+      peak: number;
+      attack: number;
+      filterType: BiquadFilterType;
+    },
+  ): void {
+    const context = this.requireContext();
+    const { startTime, duration, fromHz, toHz, q, peak, attack, filterType } = options;
+    if (!(peak > Tuning.MIN_GAIN * 10) || !(duration > attack)) return;
+    const buffer = this.ensureNoiseBuffer();
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const nyquistLimit = context.sampleRate * Tuning.PARTIAL_NYQUIST_RATIO;
+    const filter = context.createBiquadFilter();
+    filter.type = filterType;
+    filter.frequency.setValueAtTime(Math.min(fromHz, nyquistLimit), startTime);
+    filter.frequency.exponentialRampToValueAtTime(Math.min(toHz, nyquistLimit), startTime + duration);
+    filter.Q.value = q;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(peak, startTime + attack);
+    gain.gain.exponentialRampToValueAtTime(Tuning.MIN_GAIN, startTime + duration);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(voice.input);
+    const stopTime = startTime + duration + SOURCE_TAIL_SECONDS;
+    source.start(startTime, Math.random() * buffer.duration);
+    source.stop(stopTime);
+    voice.nodes.push(source, filter, gain);
+    voice.sources.push({ node: source, stopTime });
+  }
+
   /** 泡が割れる感触の要: 帯域ノイズ（大きい泡ほど低く長い）+ 上昇サイン「プッ」 */
   private addPopClick(voice: Voice, startTime: number, size: number, isSwipe: boolean): void {
     const context = this.requireContext();
@@ -889,11 +1253,11 @@ export class PrismAudioEngine implements AudioEngine {
     }
   }
 
-  private releaseVoice(voice: Voice): void {
+  private releaseVoice(voice: Voice, fadeSeconds: number = Tuning.VOICE_STEAL_FADE_SECONDS): void {
     const context = this.requireContext();
     voice.isReleasing = true;
     const now = context.currentTime;
-    const fadeEnd = now + Tuning.VOICE_STEAL_FADE_SECONDS;
+    const fadeEnd = now + fadeSeconds;
     holdParam(voice.output.gain, now);
     voice.output.gain.linearRampToValueAtTime(0, fadeEnd);
     // 未来に鳴る予定の声（グリッサンド）も、開始後に止めて ended を確実に発火させる
@@ -1056,6 +1420,22 @@ function holdParam(param: AudioParam, time: number): void {
   const currentValue = param.value;
   param.cancelScheduledValues(time);
   param.setValueAtTime(currentValue, time);
+}
+
+/** 開始音から和音の構成音（主音からの半音、昇順に並べ替える）をオクターブごとに積んだ音列。STORM_TOP_MIDI を超える音は除く */
+function chordLadder(startMidi: number, semitones: readonly number[], octaves: number): number[] {
+  const sorted = [...semitones].sort((a, b) => a - b);
+  const notes: number[] = [];
+  for (let octave = 0; octave < octaves; octave++) {
+    for (const semitone of sorted) {
+      const midi = startMidi + octave * 12 + semitone;
+      if (midi <= Tuning.STORM_TOP_MIDI) notes.push(midi);
+    }
+  }
+  // 最後に 1 つ上の主音で解決する
+  const top = startMidi + octaves * 12;
+  if (top <= Tuning.STORM_TOP_MIDI) notes.push(top);
+  return notes;
 }
 
 function panForX(x: number): number {
