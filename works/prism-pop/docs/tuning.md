@@ -10,7 +10,7 @@ pnpm build    # tsc --noEmit → vite build
 
 公開: 作品集 play の一部として https://play.nagai-shouten.com/works/prism-pop/ で配信（デプロイは play リポジトリの README を参照）
 
-開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）
+開発用クエリ: `?mute`（無音）/ `?quality=standard|rich`（画質固定）/ `?debug`（診断オーバーレイ + `window.__prismDebug()`）/ `?pops=N`（開発ビルドのみ。泡の累計の初期値）
 
 ## 視覚・操作・品質のノブ（`src/tuning.ts`）
 
@@ -63,6 +63,23 @@ pnpm build    # tsc --noEmit → vite build
 | `PRISM_CHAIN_INTERVAL_MS` | 45 | 連鎖ポップの間隔 |
 | `SHAKE_MILESTONE_DURATION_MS` / `_AMPLITUDE_PX` | 260 / 6 | マイルストーン時の画面シェイクの尺・強さ |
 
+#### プリズムストーム（`storm.ts`、`docs/architecture.md` 3.4.1）
+
+開発ビルドでは `?pops=990` のように累計の初期値を入れると、予告とストームをすぐ確かめられる。
+
+| 定数 | 既定値 | 効き方 |
+|---|---|---|
+| `STORM_EVERY` | 1000 | 累計でこの個数ごとにストーム。× ボタンの進捗リング 1 周ぶん |
+| `STORM_ANTICIPATION_POPS` / `STORM_ANTICIPATION_PRISM` | 100 / 0.35 | 予告を始める手前の個数と、予告の背景の虹色の強さ |
+| `STORM_BASE_DURATION_MS` / `_DURATION_PER_LEVEL_MS` | 12000 / 2000 | 持続時間と、回を追うごとの延長（`STORM_MAX_SCALING_LEVEL` = 5 回目で頭打ち） |
+| `STORM_WAVE_INTERVAL_MS` / `_PER_LEVEL_MS` / `_MIN_MS` | 1800 / 150 / 1200 | 波（プリズムバースト）の間隔。点滅にならないよう 1.2s 未満にしない |
+| `STORM_SPAWN_BOOST` / `_PER_LEVEL` | 1.4 / 0.1 | ストーム中の泡の湧く量の倍率 |
+| `STORM_SCATTER_AT` | 0.65 | 生き物が中央から散るタイミング（進行度） |
+| `STORM_GATHER_RADIUS_RATIO` | 0.22（画面短辺比） | 生き物が集まる輪の半径 |
+| `STORM_CREATURE_GLOW` / `_PER_LEVEL` | 0.55 / 0.08 | ストーム中の生き物の光 |
+| `STORM_FINALE_RADIUS_RATIO` | 0.75（画面対角線比） | 締めの輪の半径。残りの泡をすべて連鎖させる |
+| `STORM_SHAKE_AMPLITUDE_PX` | 10 | 開始・締めの揺れ（「視差効果を減らす」では揺らさない） |
+
 ### しぶき粒子・エフェクト（`effects.ts`）
 
 | 定数 | 既定値 | 効き方 |
@@ -84,6 +101,21 @@ pnpm build    # tsc --noEmit → vite build
 | `CREATURE_BASE_ASPECT` | 16/9 | 大きさの基準長 = min(画面幅, 画面高さ × この比)。超横長画面で巨大化しないための頭打ち |
 | `CREATURE_RISE_SPEED_MIN` / `_MAX` | 0.014 / 0.024（画面高さ比/秒） | 昇る種類（クラゲ・クリオネ・クシクラゲ）の速さ。グラスオクトパスはこの 0.7 倍で斜めに漂う |
 | `CREATURE_GLIDE_SPEED_MIN` / `_MAX` | 0.018 / 0.03（画面幅比/秒） | 横に進む種類（エイ・リーフィーシードラゴン）の速さ |
+
+#### 驚きの反応（7.5.1）
+
+種類ごとの反応（逃げ方・縮み・羽ばたき・震え・回転・光）は `CREATURE_SPECS[].startle`。
+
+| 定数 | 既定値 | 効き方 |
+|---|---|---|
+| `CREATURE_HIT_ALPHA_RATIO` | 0.25 | 画像の最大 α のこの割合以上を体とみなす。下げると薄い触手やヒレでも反応する |
+| `CREATURE_HIT_MASK_SIZE` | 64 | 当たり判定マスクの 1 辺のマス数。上げると輪郭に忠実になる |
+| `CREATURE_STARTLE_COOLDOWN_S` | 0.4 | 驚いた直後に再反応しない秒。下げると連打で何度も鳴る |
+| `CREATURE_SQUASH_HZ` / `_DAMPING` | 2.4 / 5 | 縮んで膨らみ返す揺れの速さと収まる速さ |
+| `CREATURE_GLOW_OPACITY_BOOST` | 1.4 | 光ったときに不透明度へ上乗せする倍率 |
+| `CREATURE_GLOW_ADD` | 0.35 | 光ったときに加算する明るさ。上げると強く発光する |
+| `CREATURE_TURN_S` | 0.4 | 向きを反転する動きの秒（リーフィーシードラゴン） |
+| `CREATURE_FLEE_RETURN_MIN_S` / `_MAX_S` | 4 / 8 | 逃げ去った生き物（エイ・グラスオクトパス）が再登場するまでの秒 |
 
 ### 適応型画質（`quality.ts`）
 
