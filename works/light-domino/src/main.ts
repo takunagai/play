@@ -25,6 +25,7 @@ import type { ChainEvent, ChainSchedule } from "./audio/engine";
 import { createAudioEngine } from "./audio/engine";
 import {
   AFTERGLOW_FADE_MS,
+  AWAKEN_LIGHT_ALPHA,
   CHAIN_LIGHT_RECENT_TILES,
   CHAIN_LIGHT_SLIDE_MS,
   COMMIT_RETRACE_MS,
@@ -44,6 +45,7 @@ import {
   FALLEN_GLOW_REST_ALPHA,
   FALLEN_TILE_LENGTH_PX,
   FINALE_BLOOM_CORE_WIDTH_PX,
+  FINALE_BLOOM_CORE_ALPHA,
   FINALE_BLOOM_DELAY_MS,
   FINALE_BLOOM_GLOW_ALPHA,
   FINALE_BLOOM_GLOW_WIDTH_PX,
@@ -61,11 +63,14 @@ import {
   IGNORE_BAND_BOTTOM_PX,
   INPUT_EDGE_INSET_PX,
   INTRO_FADE_MS,
+  INTRO_TILE_ALPHA,
   MAX_COMMITTED_TRAILS,
   MAX_DOMINOES,
   MAX_LIVE_NODES,
   MIN_DOMINOES,
   MIN_PATH_LENGTH_PX,
+  MOBILE_BREAKPOINT_PX,
+  MOBILE_DOMINO_SPACING_PX,
   MOBILE_ENDPOINT_BLINK_TILES,
   MOBILE_FALLEN_TILE_LENGTH_PX,
   MOBILE_FLOOR_GUIDE_SPACING_PX,
@@ -77,23 +82,35 @@ import {
   NODE_HALO_RADIUS_PX,
   NODE_RADIUS_PX,
   PALETTE_BACKGROUND,
+  PALETTE_COOL_GLOW,
   PALETTE_GOLD,
   PALETTE_TILE,
+  PALETTE_WARM_GLOW,
   PARALLEL_RUN_MIN_GAP_PX,
   PARTICLE_CAP_STEPS,
   PORTRAIT_SCALE,
+  PULSE_ALPHA,
   PULSE_END_RADIUS_PX,
   PULSE_MAX_CONCURRENT,
   PULSE_START_RADIUS_PX,
   RAW_POINT_MIN_DISTANCE_PX,
   RAW_POINT_MIN_INTERVAL_MS,
   SHADOW_ALPHA,
+  SHADOW_OFFSET_X_PX,
+  SHADOW_OFFSET_Y_PX,
   SHOCKWAVE_MS,
+  SLEEPING_AWAKEN_MS,
   SLEEPING_GLOW_ALPHA,
+  SLEEPING_LIGHT_AWAKEN_BOOST,
   SLEEPING_LIGHT_COUNT_MAX,
   SLEEPING_LIGHT_COUNT_MIN,
+  SLEEPING_LIGHT_GLOW_RADIUS_FACTOR,
+  SLEEPING_LIGHT_ALPHA,
   SLEEPING_LIGHT_PERIOD_MAX_MS,
   SLEEPING_LIGHT_PERIOD_MIN_MS,
+  SLEEPING_LIGHT_RADIUS_MAX_PX,
+  SLEEPING_LIGHT_RADIUS_MIN_PX,
+  SLEEPING_LIGHT_WAVE_AMPLITUDE,
   SMOOTHING_WINDOW_POINTS,
   STROKE_DISCARD_MS,
   TILE_DEPTH_PX,
@@ -108,6 +125,11 @@ import {
   TRACING_ECHO_RADIUS_PX,
   TRACING_TILE_ALPHA,
   TRACING_TILE_HEAD_ALPHA,
+  VIGNETTE_EDGE_ALPHA,
+  VIGNETTE_INNER_RADIUS_RATIO,
+  VIGNETTE_MID_ALPHA,
+  VIGNETTE_MID_STOP,
+  VIGNETTE_RADIUS_RATIO,
 } from "./tuning";
 
 type State = "intro" | "tracing" | "aligned" | "chain" | "finale";
@@ -222,12 +244,12 @@ function clampToBounds(point: Vec2, bounds: { x: number; y: number; w: number; h
 }
 
 function dominoSpacingPx(shortEdge: number): number {
-  if (shortEdge <= 430) return 12;
+  if (shortEdge <= MOBILE_BREAKPOINT_PX) return MOBILE_DOMINO_SPACING_PX;
   return Math.min(DOMINO_SPACING_MAX_PX, Math.max(DOMINO_SPACING_MIN_PX, shortEdge * DOMINO_SPACING_RATIO));
 }
 
 function tileLengthPx(shortEdge: number): number {
-  return shortEdge <= 430 ? MOBILE_FALLEN_TILE_LENGTH_PX : FALLEN_TILE_LENGTH_PX;
+  return shortEdge <= MOBILE_BREAKPOINT_PX ? MOBILE_FALLEN_TILE_LENGTH_PX : FALLEN_TILE_LENGTH_PX;
 }
 
 /** 補正済みの点列から仮配置を作り直す（呼び出し側で発音を間引く） */
@@ -300,7 +322,8 @@ function buildSleepingLights(): SleepingLight[] {
     return {
       nx: 0.12 + column * 0.19 + ((row * 0.037 + index * 0.013) % 0.055),
       ny: 0.12 + row * 0.19 + ((column * 0.041 + index * 0.017) % 0.075),
-      radius: 1 + (index % 3) * 0.45,
+      radius: SLEEPING_LIGHT_RADIUS_MIN_PX +
+        (index % 3) * ((SLEEPING_LIGHT_RADIUS_MAX_PX - SLEEPING_LIGHT_RADIUS_MIN_PX) / 2),
       phase: (index * 1.618) % (Math.PI * 2),
       periodMs: SLEEPING_LIGHT_PERIOD_MIN_MS +
         (index / Math.max(1, count - 1)) * (SLEEPING_LIGHT_PERIOD_MAX_MS - SLEEPING_LIGHT_PERIOD_MIN_MS),
@@ -448,10 +471,12 @@ new P5((p: P5) => {
     const floorY = floorLightCenter.y * p.height;
     const radius = Math.min(p.width, p.height) * FLOOR_GLOW_RADIUS_RATIO;
     const mixChannel = (start: number, end: number, amount: number): number => Math.round(start + (end - start) * amount);
-    const glowColor = `rgb(${mixChannel(26, 42, chainProgress)}, ${mixChannel(31, 38, chainProgress)}, ${mixChannel(41, 32, chainProgress)})`;
+    const cool = { r: parseInt(PALETTE_COOL_GLOW.slice(1, 3), 16), g: parseInt(PALETTE_COOL_GLOW.slice(3, 5), 16), b: parseInt(PALETTE_COOL_GLOW.slice(5, 7), 16) };
+    const warm = { r: parseInt(PALETTE_WARM_GLOW.slice(1, 3), 16), g: parseInt(PALETTE_WARM_GLOW.slice(3, 5), 16), b: parseInt(PALETTE_WARM_GLOW.slice(5, 7), 16) };
+    const glowColor = `rgb(${mixChannel(cool.r, warm.r, chainProgress)}, ${mixChannel(cool.g, warm.g, chainProgress)}, ${mixChannel(cool.b, warm.b, chainProgress)})`;
     const floorGlow = ctx.createRadialGradient(floorX, floorY, 0, floorX, floorY, Math.max(1, radius));
     floorGlow.addColorStop(0, glowColor);
-    floorGlow.addColorStop(1, "rgba(17, 19, 24, 0)");
+    floorGlow.addColorStop(1, `${PALETTE_BACKGROUND}00`);
     ctx.globalAlpha = FLOOR_GLOW_ALPHA_START + (FLOOR_GLOW_ALPHA_END - FLOOR_GLOW_ALPHA_START) * chainProgress;
     ctx.fillStyle = floorGlow;
     const portraitScaleY = p.height > p.width ? 4 / 3 : 1;
@@ -469,7 +494,7 @@ new P5((p: P5) => {
     if (!gridLayer) gridLayer = document.createElement("canvas");
     const ctx = ensureStaticLayer(gridLayer, p.width, p.height);
     if (!ctx) return;
-    const gridSpacing = p.width <= 430 ? MOBILE_FLOOR_GUIDE_SPACING_PX : FLOOR_GUIDE_SPACING_PX;
+    const gridSpacing = p.width <= MOBILE_BREAKPOINT_PX ? MOBILE_FLOOR_GUIDE_SPACING_PX : FLOOR_GUIDE_SPACING_PX;
     ctx.globalAlpha = FLOOR_GUIDE_ALPHA;
     ctx.strokeStyle = PALETTE_TILE;
     ctx.lineWidth = 1;
@@ -491,11 +516,11 @@ new P5((p: P5) => {
     if (!vignetteLayer) vignetteLayer = document.createElement("canvas");
     const ctx = ensureStaticLayer(vignetteLayer, p.width, p.height);
     if (!ctx) return;
-    const vignetteRadius = Math.hypot(p.width, p.height) * 0.56;
-    const vignette = ctx.createRadialGradient(p.width / 2, p.height / 2, Math.min(p.width, p.height) * 0.18, p.width / 2, p.height / 2, vignetteRadius);
-    vignette.addColorStop(0, "rgba(17, 19, 24, 0)");
-    vignette.addColorStop(0.72, "rgba(17, 19, 24, 0.12)");
-    vignette.addColorStop(1, "rgba(17, 19, 24, 0.68)");
+    const vignetteRadius = Math.hypot(p.width, p.height) * VIGNETTE_RADIUS_RATIO;
+    const vignette = ctx.createRadialGradient(p.width / 2, p.height / 2, Math.min(p.width, p.height) * VIGNETTE_INNER_RADIUS_RATIO, p.width / 2, p.height / 2, vignetteRadius);
+    vignette.addColorStop(0, `${PALETTE_BACKGROUND}00`);
+    vignette.addColorStop(VIGNETTE_MID_STOP, `${PALETTE_BACKGROUND}${Math.round(VIGNETTE_MID_ALPHA * 255).toString(16).padStart(2, "0")}`);
+    vignette.addColorStop(1, `${PALETTE_BACKGROUND}${Math.round(VIGNETTE_EDGE_ALPHA * 255).toString(16).padStart(2, "0")}`);
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, p.width, p.height);
   };
@@ -515,7 +540,7 @@ new P5((p: P5) => {
       if (glowCtx) {
         glowCtx.fillStyle = PALETTE_GOLD;
         glowCtx.beginPath();
-        glowCtx.arc(center, center, light.radius * 4.5, 0, Math.PI * 2);
+        glowCtx.arc(center, center, light.radius * SLEEPING_LIGHT_GLOW_RADIUS_FACTOR, 0, Math.PI * 2);
         glowCtx.fill();
       }
       const coreCanvas = document.createElement("canvas");
@@ -883,18 +908,18 @@ new P5((p: P5) => {
         const sprite = sleepingLightSprites[index];
         if (!sprite) continue;
         const wave = 0.7 + 0.3 * Math.sin((nowMs / light.periodMs) * Math.PI * 2 + light.phase);
-        const awakened = light.awakenedAtMs !== null && nowMs - light.awakenedAtMs < 500 ? 1 : 0;
+        const awakened = light.awakenedAtMs !== null && nowMs - light.awakenedAtMs < SLEEPING_AWAKEN_MS ? 1 : 0;
         const x = light.nx * p.width;
         const y = light.ny * p.height;
         ctx.globalAlpha = introVisibility * SLEEPING_GLOW_ALPHA;
         ctx.drawImage(sprite.glow, x - sprite.glow.width / 2, y - sprite.glow.height / 2);
-        ctx.globalAlpha = introVisibility * Math.min(0.9, 0.5 + 0.35 * wave + 0.2 * awakened);
+        ctx.globalAlpha = introVisibility * Math.min(AWAKEN_LIGHT_ALPHA, SLEEPING_LIGHT_ALPHA + SLEEPING_LIGHT_WAVE_AMPLITUDE * wave + SLEEPING_LIGHT_AWAKEN_BOOST * awakened);
         ctx.drawImage(sprite.core, x - sprite.core.width / 2, y - sprite.core.height / 2);
         ctx.globalAlpha = 1;
       }
     }
 
-    const mobile = p.width <= 430;
+    const mobile = Math.min(p.width, p.height) <= MOBILE_BREAKPOINT_PX;
     const tileWidth = mobile ? MOBILE_TILE_WIDTH_PX : TILE_WIDTH_PX;
     const portrait = p.height > p.width ? PORTRAIT_SCALE : 1;
     const tileDepth = (mobile ? MOBILE_TILE_DEPTH_PX : TILE_DEPTH_PX) * portrait;
@@ -920,8 +945,8 @@ new P5((p: P5) => {
       const length = tileWidth + (fallenLength - tileWidth) * progress;
       const depth = Math.max(1.5, tileDepth * (1 - progress * 0.72));
       const angle = Math.atan2(domino.ty, domino.tx) + Math.PI / 2;
-      const shadowX = 3 * (1 - progress);
-      const shadowY = 4 + 4 * progress;
+      const shadowX = SHADOW_OFFSET_X_PX * (1 - progress);
+      const shadowY = SHADOW_OFFSET_Y_PX * (1 - progress) / 2 + SHADOW_OFFSET_Y_PX * progress;
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
@@ -961,7 +986,7 @@ new P5((p: P5) => {
     };
 
     if (introTiles.length > 0 && introVisibility > 0) {
-      for (const domino of introTiles) drawDomino(domino, PALETTE_TILE, introVisibility * 0.42, null);
+      for (const domino of introTiles) drawDomino(domino, PALETTE_TILE, introVisibility * INTRO_TILE_ALPHA, null);
     } else if (introVisibility <= 0) {
       introTiles = [];
     }
@@ -1031,7 +1056,7 @@ new P5((p: P5) => {
       const startRadius = mobile ? MOBILE_PULSE_START_RADIUS_PX : PULSE_START_RADIUS_PX;
       const endRadius = mobile ? MOBILE_PULSE_END_RADIUS_PX : PULSE_END_RADIUS_PX;
       ctx.save();
-      ctx.globalAlpha = 0.1 * (1 - progress);
+      ctx.globalAlpha = PULSE_ALPHA * (1 - progress);
       ctx.fillStyle = PALETTE_GOLD;
       ctx.beginPath();
       ctx.arc(pulse.x, pulse.y, startRadius + (endRadius - startRadius) * progress, 0, Math.PI * 2);
@@ -1052,7 +1077,7 @@ new P5((p: P5) => {
         const visibleCount = Math.max(2, Math.ceil(normalizedStrokePoints.length * bloom));
         ctx.save();
         ctx.strokeStyle = PALETTE_GOLD;
-        ctx.globalAlpha = 0.92;
+        ctx.globalAlpha = FINALE_BLOOM_CORE_ALPHA;
         ctx.lineWidth = FINALE_BLOOM_CORE_WIDTH_PX;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";

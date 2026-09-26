@@ -86,8 +86,8 @@ export const MAX_COMMITTED_TRAILS = 24;
 export const TRAIL_CORE_ALPHA_COMMIT = 1.0;
 /** 残光段階の蕊 alpha（正本 §7.2: 節点上限超過後も蕊は消さず 0.5 へ減衰する） */
 export const TRAIL_CORE_ALPHA_AFTERGLOW = 0.5;
-/** 光跡の線幅（px） */
-export const TRAIL_WIDTH_PX = 2.5;
+/** 光跡の蕊の線幅（px）。正本 §7.2 の 1.5px（再設計で 2.5 から変更した唯一の例外的な値変更） */
+export const TRAIL_WIDTH_PX = 1.5;
 
 // ---- グロー（別レイヤー。pitfalls.md の白飽和対策）----
 /** グローキャンバスの縮小率（1/6 サイズで描き CSS 拡大） */
@@ -122,6 +122,10 @@ export const QUALITY_SLOW_FRAME_MEDIAN_MS = 24;
 export const QUALITY_THROTTLE_MAX_VARIATION = 0.12;
 
 // ---- 再設計: 展示室の床 ----
+/** モバイル判定の境界（px）。密度ノブは短辺 min(w,h) で決める */
+export const MOBILE_BREAKPOINT_PX = 430;
+/** モバイルの板中心間隔（px） */
+export const MOBILE_DOMINO_SPACING_PX = 12;
 export const FLOOR_GUIDE_SPACING_PX = 48;
 export const MOBILE_FLOOR_GUIDE_SPACING_PX = 32;
 export const FLOOR_GUIDE_ALPHA = 0.03;
@@ -130,6 +134,15 @@ export const FLOOR_GLOW_ALPHA_START = 0.5;
 export const FLOOR_GLOW_ALPHA_END = 0.8;
 export const CHAIN_LIGHT_SLIDE_MS = 500;
 export const CHAIN_LIGHT_RECENT_TILES = 4;
+/** 周辺減光の半径 = 画面対角 × この値 */
+export const VIGNETTE_RADIUS_RATIO = 0.56;
+/** 周辺減光の内側開始半径 = 短辺 × この値 */
+export const VIGNETTE_INNER_RADIUS_RATIO = 0.18;
+/** 周辺減光の中間ストップ（位置と alpha） */
+export const VIGNETTE_MID_STOP = 0.72;
+export const VIGNETTE_MID_ALPHA = 0.12;
+/** 周辺減光の外縁 alpha */
+export const VIGNETTE_EDGE_ALPHA = 0.68;
 
 // ---- 再設計: 板の物体表現 ----
 export const TILE_WIDTH_PX = 10;
@@ -143,6 +156,9 @@ export const TILE_SIDE_BAND_ALPHA = 0.35;
 export const TILE_OUTLINE_ALPHA = 0.25;
 export const EDGE_REFLECTION_ALPHA = 0.4;
 export const SHADOW_ALPHA = 0.5;
+/** 床影の offset（px）。立っている板は (0, 8) の固定（正本 §10 の SHADOW_OFFSET 系） */
+export const SHADOW_OFFSET_X_PX = 0;
+export const SHADOW_OFFSET_Y_PX = 8;
 export const FALLEN_GLOW_ALPHA = 0.08;
 export const FALLEN_GLOW_REST_ALPHA = 0.03;
 
@@ -151,6 +167,17 @@ export const SLEEPING_LIGHT_COUNT_MIN = 12;
 export const SLEEPING_LIGHT_COUNT_MAX = 18;
 export const SLEEPING_LIGHT_PERIOD_MIN_MS = 4000;
 export const SLEEPING_LIGHT_PERIOD_MAX_MS = 7000;
+/** 眠る光の半径範囲（px）。分布式は 1 + (index % 3) × (max - min) / 2 */
+export const SLEEPING_LIGHT_RADIUS_MIN_PX = 1;
+export const SLEEPING_LIGHT_RADIUS_MAX_PX = 2;
+/** 眠る光の core alpha の基準・明滅振幅・覚醒時の加算。上限は AWAKEN_LIGHT_ALPHA */
+export const SLEEPING_LIGHT_ALPHA = 0.5;
+export const SLEEPING_LIGHT_WAVE_AMPLITUDE = 0.35;
+export const SLEEPING_LIGHT_AWAKEN_BOOST = 0.2;
+/** 覚醒窓（ms）。最初の接触からこの間だけ眠る光が立ち上がる */
+export const SLEEPING_AWAKEN_MS = 500;
+/** 眠る光のグロー半径 = core 半径 × この値 */
+export const SLEEPING_LIGHT_GLOW_RADIUS_FACTOR = 4.5;
 export const SLEEPING_GLOW_ALPHA = 0.05;
 export const AWAKEN_LIGHT_ALPHA = 0.9;
 export const TRACING_TILE_ALPHA = 0.55;
@@ -176,10 +203,16 @@ export const MAX_LIVE_NODES = 300;
 export const FINALE_BLOOM_DELAY_MS = 200;
 export const FINALE_BLOOM_MS = 800;
 export const FINALE_BLOOM_CORE_WIDTH_PX = 3;
+/** 開花中の蕊（本体の描線）の alpha */
+export const FINALE_BLOOM_CORE_ALPHA = 0.92;
 export const FINALE_BLOOM_GLOW_ALPHA = 0.1;
 export const FINALE_BLOOM_GLOW_WIDTH_PX = 24;
 export const FINALE_SHOCKWAVE_RADIUS_RATIO = 0.4;
 export const FINALE_SHOCKWAVE_ALPHA = 0.12;
+/** 着地パルスの塗りの alpha（正本 §3.4 の gold alpha 0.10） */
+export const PULSE_ALPHA = 0.1;
+/** 導入画面の休止中の板の alpha */
+export const INTRO_TILE_ALPHA = 0.42;
 export const COMMIT_RETRACE_MS = 500;
 export const AFTERGLOW_FADE_MS = 10000;
 export const CROSSING_VELOCITY_BOOST = 0.08;
