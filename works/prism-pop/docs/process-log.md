@@ -50,3 +50,9 @@
   - 残る差: rich はその場の背景色を映すが、standard は背景の近似色（固定値）で焼くため、縁の虹色が rich よりわずかに控えめ
 - 作業環境の落とし穴: rtk 経由の `pnpm exec tsc --noEmit` は壊れたグローバル tsc（mise の typescript 7.0.2）を呼んで exit 1 で落ちるのに「TypeScript: No errors found」と要約表示する。型チェックは `rtk proxy ./node_modules/.bin/tsc --noEmit` で実行し終了コードを見る（`pnpm build` 内の tsc はプロジェクトのものなので影響なし）
 - 改名: プロジェクトのルートフォルダを `iab-smoke` → `prism-pop`、`web/package.json` の name を `web` → `prism-pop` に変更（`web/` サブフォルダ名はスキルの構成に合わせて維持）。スキルは絶対パスのシンボリックリンクなので影響なし。Claude Code の memory は新パス用のディレクトリへ複写
+
+## 移行元で進めた 7 コミットの移植（2026-09-26）
+
+- 2026-09-25 に作品集 play へ移行した後、それに気づかず移行元リポジトリ（`takunagai/prism-pop`）で 7 コミットを作り、旧 Worker（prism-pop.nagai-shouten.workers.dev）へデプロイしていた。内容は開始案内の点滅・生き物のリアクション・タイトルへ戻る操作と遊び方ダイアログとプリズムストーム・全画面ボタンと Web App Manifest・README の書き直し・旧スクショ削除・rich 画質の泡の透過の修正
+- 移行元の `git format-patch d860ba2..5206df0` を、パスを `web/` → 作品直下（`web/README.md` → `docs/tuning.md`）へ読み替えて `git am -3 --directory=works/prism-pop` で当てた。7 本とも 3-way の自動マージで衝突なし。件名には `(prism-pop)` の scope を付け直した
+- 作品集のサブパス配信（`/works/prism-pop/`）への適合: `index.html` の manifest・apple-touch-icon の参照と、`manifest.webmanifest` の `start_url`・`scope`・`icons[].src` を相対パスにした（manifest 内は manifest の URL から解決される）。README の遊ぶリンクを play の URL に、デプロイの説明を play の `main` への merge に直した
