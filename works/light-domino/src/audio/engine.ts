@@ -22,7 +22,7 @@ export interface ChainSchedule {
   hushAtMs: number;
   /** 最後の板が床へ触れる瞬間。和音・発光・衝撃波をこの時刻へ揃える */
   finaleAtMs: number;
-  /** 曲線を静的な光跡へ焼き付けて板を破棄できる時刻 */
+  /** 曲線を静的な光跡へ焼き付けて板を破棄できる時刻。開花はこの後も寿命（遅延 + 開花時間）まで独立に描き切る */
   settleAtMs: number;
 }
 

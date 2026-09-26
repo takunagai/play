@@ -209,6 +209,20 @@ interface CommittedTrail {
   parallel: boolean[];
 }
 
+/**
+ * 確定（settleAtMs）後も開花を寿命まで描き切るためのスナップショット。
+ * 確定時に normalizedStrokePoints の immutable なコピーを作り、settled / schedule の破棄と独立に
+ * 「遅延(200ms) + 開花時間(800+800t ms)」まで描き続ける。寿命が尽きたら捨てる。
+ */
+interface FinaleBloom {
+  /** 画面正規化座標の点列（確定時のコピー。リサイズに強い正規化座標のまま保持する） */
+  points: Vec2[];
+  /** 開花の時刻の基準（この演奏の finaleAtMs。確定前と同じ elapsed 計算でシームレスに引き継ぐ） */
+  startedAtMs: number;
+  /** 開花時間。遅延を含まない（800 + 800t ms） */
+  durationMs: number;
+}
+
 const audio = createAudioEngine();
 const quality = new QualityController(PARTICLE_CAP_STEPS.length);
 const frameCounter = createFrameCounter();
@@ -233,6 +247,12 @@ let schedule: ChainSchedule | null = null;
 let chainEvents: ChainEvent[] = [];
 let chainDirectionFromEnd = false; // true = 列の終端側から倒す
 let finaleAtMs: number | null = null; // 最後の板が床へ触れた（発光の起点）
+/**
+ * 確定（settleAtMs）後の開花スナップショット。確定で settled / normalizedStrokePoints を破棄しても
+ * 開花を寿命（遅延 + 開花時間、最大 2000ms）まで独立に描き切るためのもの（正本 §3.5・V-01）。
+ * 次の連鎖の開始で破棄する。
+ */
+let finaleBloom: FinaleBloom | null = null;
 let pulses: LightPulse[] = [];
 let shockwaves: Shockwave[] = [];
 let traceEchoes: TraceEcho[] = [];
@@ -779,6 +799,7 @@ new P5((p: P5) => {
     );
     settled.goldThrough = -1;
     finaleAtMs = null;
+    finaleBloom = null; // 前の演奏の開花スナップショットを破棄し、新しい連鎖の上に古い開花を描かない
     setStage("chain");
   };
 
@@ -965,6 +986,15 @@ new P5((p: P5) => {
         setStage("finale");
       }
       if (nowMs >= schedule.settleAtMs) {
+        // 開花を確定後も寿命まで描き切る（V-01）: settled / normalizedStrokePoints の immutable
+        // スナップショットを作り、破棄後も独立に描き続ける。schedule はここで破棄して次の入力を受け付ける
+        if (finaleAtMs !== null && normalizedStrokePoints && normalizedStrokePoints.length >= 2) {
+          finaleBloom = {
+            points: normalizedStrokePoints.map((point) => ({ x: point.x, y: point.y })),
+            startedAtMs: finaleAtMs,
+            durationMs: FINALE_BLOOM_MS_BASE + FINALE_BLOOM_T_FACTOR * lastPerformanceRatio,
+          };
+        }
         commitTrailAndSparks();
         settled = null;
         normalizedStrokePoints = null;
@@ -1221,19 +1251,24 @@ new P5((p: P5) => {
       ctx.restore();
     }
 
-    if (finaleAtMs !== null && settled && normalizedStrokePoints) {
-      // 開花時間はその演奏の t に比例する（正本 §3.5 の長さ比例。800 + 800t ms、最大 1600ms）
-      const bloomDurationMs = FINALE_BLOOM_MS_BASE + FINALE_BLOOM_T_FACTOR * lastPerformanceRatio;
-      const elapsed = nowMs - finaleAtMs - FINALE_BLOOM_DELAY_MS;
-      if (elapsed >= 0 && elapsed <= bloomDurationMs) {
-        const bloom = Math.min(1, elapsed / bloomDurationMs);
+    // 開花（正本 §3.5 の長さ比例。800 + 800t ms、最大 1600ms + 遅延 200ms）。
+    // 確定前は settled / normalizedStrokePoints、確定後は finaleBloom スナップショットが源。
+    // どちらも同じ elapsed 計算なので確定の瞬間に描画が途切れない（V-01: 長い演奏ほど開花が
+    // 長いのに確定で打ち切られる問題の修正。寿命まで完全に描き切る）
+    const bloomSource = finaleBloom ?? (settled && normalizedStrokePoints && finaleAtMs !== null
+      ? { points: normalizedStrokePoints, startedAtMs: finaleAtMs, durationMs: FINALE_BLOOM_MS_BASE + FINALE_BLOOM_T_FACTOR * lastPerformanceRatio }
+      : null);
+    if (bloomSource) {
+      const elapsed = nowMs - bloomSource.startedAtMs - FINALE_BLOOM_DELAY_MS;
+      if (elapsed >= 0 && elapsed <= bloomSource.durationMs) {
+        const bloom = Math.min(1, elapsed / bloomSource.durationMs);
         glowGoldPath(
-          normalizedStrokePoints,
+          bloomSource.points,
           FINALE_BLOOM_GLOW_ALPHA * (0.65 + 0.35 * GLOW_PULSE_AMPLITUDE * lastAmp),
           FINALE_BLOOM_GLOW_WIDTH_PX,
           bloom,
         );
-        const visibleCount = Math.max(2, Math.ceil(normalizedStrokePoints.length * bloom));
+        const visibleCount = Math.max(2, Math.ceil(bloomSource.points.length * bloom));
         ctx.save();
         ctx.strokeStyle = PALETTE_GOLD;
         ctx.globalAlpha = FINALE_BLOOM_CORE_ALPHA;
@@ -1241,7 +1276,7 @@ new P5((p: P5) => {
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.beginPath();
-        normalizedStrokePoints.slice(0, visibleCount).forEach((point, index) => {
+        bloomSource.points.slice(0, visibleCount).forEach((point, index) => {
           const x = point.x * p.width;
           const y = point.y * p.height;
           if (index === 0) ctx.moveTo(x, y);
@@ -1249,6 +1284,9 @@ new P5((p: P5) => {
         });
         ctx.stroke();
         ctx.restore();
+      } else if (finaleBloom && elapsed > bloomSource.durationMs) {
+        // スナップショットの寿命が尽きたら捨てる。確定前の源（settled 側）は schedule 破棄までそのまま
+        finaleBloom = null;
       }
     }
 
