@@ -1,0 +1,15 @@
+{
+  "slug": "light-domino",
+  "title": "光のドミノ",
+  "date": "2026-09-25",
+  "origin": "autopilot",
+  "summary": "なぞった線に光のドミノが並び、ひと押しで連鎖が倒れて和音が鳴る",
+  "emotion": "緊張と畏怖",
+  "verb": "撫でる・かき混ぜる",
+  "tone": "ダーク＋ネオン",
+  "sound": "アコースティック風",
+  "scale": "メジャーペンタ",
+  "thumbnail": "thumbnail.webp",
+  "license": "MIT",
+  "generatedImages": []
+}

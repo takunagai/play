@@ -55,3 +55,12 @@
 - `previews` を足してもビルドは成功するのに PR のコメントは「No Preview URL」だった。`preview_urls: true` が必要で、しかもこの設定は **本番の `wrangler deploy` で反映される**（公式: /workers/previews/custom-domains/）。main に取り込んで本番を再デプロイした後のブランチビルドで、`https://<ブランチ名>-play.nagai-shouten.workers.dev` がコメントされた
 - 依存キャッシュ: 効く。1 回目は再利用 0、2 回目は heartburst 89/89・ルート 36/37・prism-pop 13/35 を再利用。install 6.9 秒 → 4.8 秒、ビルド全体 44 秒 → 41 秒（初期化と Node の導入が大半）
 - 本番確認: `https://play.nagai-shouten.com/`・`/works/prism-pop/`・`/works/heartburst/` が 200、OGP の URL は本番と一致。`pnpm verify <slug> --url https://play.nagai-shouten.com` で 2 作品ともタッチを含む 5 項目 pass（E2E は agent-browser の代わりに、同じ CDP タッチを使う `pnpm verify` で行った）
+
+## 2026-09-26 light-domino 再設計の状態検品
+
+- 実入力（合成 PointerEvent + CDP タッチ、mouse / touch の 2 経路）で 6 状態 × 375 / 1280px のスクリーンショットを取得（`.verify/light-domino/states/`。コミットしない）。撮り分けは `window.__art.getState()` を見て確認し、tracing はドラッグ 75% 地点、chain は入射 3.5 秒後（中盤）、finale は開花 window、commit は settle 後に撮影
+- ピクセル統計（実測）: 全状態 20 枚で白飛び 0（lum≥250 の画素なし。最大明度 245 = warmWhite 未満、p99 の最大は commit-cross-375 の 105 で暗室維持）。濁った茶・オリーブ近似色（RGB を (72,48,24)〜(120,96,48) の箱で分類）は finale 0.06〜0.10% / commit 0.27〜0.30% / 交差 commit 0.54〜0.60% と少量で、その 95〜100% が lum≥150 の明部から 6px 以内＝金の線の縁の落ち影で、面ではない。375px の主役画素比は全状態で 1280px と同等以上（tracing の warmWhite 0.184% vs 0.102%、finale の金 0.461% vs 0.381%）＝独立スケールが効いている
+- intro 実測: 床の眠る光の金の小点は lum≥80 の連結成分で 1280=19 個 / 375=18 個（正本の 12〜18 個と整合）、下部帯（y 705〜751）に文字画素 764px（lum≥96）＝タイトル・案内は 375px でも埋もれず画面内（帯背景の中央明度 19 に対し文字は明部）
+- 回帰の実測: `?mute` で maxAmp 0 のまま連鎖が視覚だけで進行（4.5 秒サンプリングで chain 到達・amp 0 維持・scrollWidth 375）、1280 → 375 のリサイズ後も aligned を維持し列が再描画（ライブ canvas の lum≥150 画素 746px）・横スクロールなし。`pnpm verify` は mouse maxAmp 0.0156 / touch 0.0071、meanDrawMs 1280 = 0.59ms / 375 = 0.40ms で 5 項目 pass
+- 床の温度の実測: 薄明部（40≤lum<110）の平均 R-B が intro 7 → chain 14〜18 → finale 25〜29 → commit 確定後 45 と単調に上がり、照りが冷色から暖色へ補間される正本の物語と整合
+- サムネイルを開花の finale（finale-1280）から 1200x630 へ cover 切り出しで更新
