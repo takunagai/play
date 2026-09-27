@@ -673,8 +673,8 @@ new P5((p: P5) => {
   };
 
   /** 照りドリフト帯（coolGlow・alpha ≤ 0.10・帯幅 = min(w,h) × 0.3・raised cosine の濃度）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。
-   *  形状は幅 = 帯幅・長手 = ビューポート対角線 + 帯幅の長方形。45 度回転して translate(travel, 0) で
-   *  転画するため、どの位相でも長手が画面の対角線以上を覆い、帯が画面全面を横切る（N-MF-02）。
+   *  形状は幅 = 帯幅・長手 = ビューポート対角線 + 帯幅の長方形。45 度回転して帯の中心線（x + y = travel）
+   *  上へ置くため、どの位相でも長手が画面の対角線以上を覆い、帯が画面全面を横切る（N-MF-02）。
    *  旧・帯幅 × 1.5 の正方形は長手が足りず帯が画面上端の短い菱形に留まっていた（N-V-01） */
   const buildDriftBandSprite = (): void => {
     const shortEdge = Math.min(p.width, p.height);
@@ -1134,9 +1134,19 @@ new P5((p: P5) => {
       const span = p.width + p.height + bandWidth * 2;
       const phase = prefersReducedMotion ? 0.25 : (nowMs % FLOOR_DRIFT_PERIOD_MS) / FLOOR_DRIFT_PERIOD_MS;
       const travel = span * phase - bandWidth;
-      // 帯の中心線（x + y = travel の 45 度の直線）上にスプライト中心を置いて回転転画する
+      // 帯の中心線は x + y = travel の 45 度の直線。スプライト中心はこの中心線のうち
+      // viewport（x ∈ [0,w]・y ∈ [0,h]）と交わる区間の中点へ置く。travel < 0（帯が右下へ
+      // 完全に退いた）と travel > w + h（左上へ完全に退いた）では前後の線形区間をそのまま延長する。
+      // clamp すると帯の出入り端で中心が端に張り付き最大 1 周期の 6.7% 静止するため、
+      // 「24 秒周期で床を線形に横切る」を保つ（R6-V-01: 旧 translate(travel, 0) は中心を
+      // 常に y=0 へ固定し、帯の到達 y が (L+W)/(2√2) に抑えられて下端へ届かなかった）
+      // 可視区間 [uMin, uMax]（u = x = travel - y）とその中点を解いて translate へ
+      const uLo = Math.min(travel, travel - p.height); // = travel - max(y)
+      const uHi = Math.max(travel, travel - p.height); // = travel - min(y)
+      const cx = (Math.max(0, Math.min(p.width, uLo)) + Math.min(p.width, Math.max(0, uHi))) / 2;
+      const cy = travel - cx;
       ctx.save();
-      ctx.translate(travel, 0);
+      ctx.translate(cx, cy);
       ctx.rotate(Math.PI / 4);
       ctx.globalAlpha = 1;
       ctx.drawImage(driftBandSprite, -driftBandSprite.width / 2, -driftBandSprite.height / 2);
