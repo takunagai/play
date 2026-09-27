@@ -433,6 +433,7 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 | `FLOOR_DRIFT_PERIOD_MS` | 24000 | 床の照りのドリフトの周期 |
 | `FLOOR_DRIFT_ALPHA_MAX` | 0.10 | ドリフト帯の alpha 上限（0.04 から引き上げ。理由と参考数値は `art-direction.md` §7.1: 0.04 では検証プローブで検出不能な水準のため、視認性確保で 0.10。帯の濃度は線形でなく raised cosine） |
 | `FLOOR_DRIFT_WIDTH_RATIO` | 0.3 | ドリフト帯の幅 = `min(w, h) × この値` |
+| `FLOOR_DRIFT_SPRITE_LENGTH` | `hypot(w, h) + 帯幅`（tuning.ts に定数は置かない。main.ts の `buildDriftBandSprite` で計算） | ドリフト帯スプライトの長手 = ビューポート対角線 + 帯幅（幅は帯幅のまま）。45 度回転した帯の長手が常に画面の対角線以上を覆い、任意のアスペクト比で帯が画面全面を横切る。R6（2026-09-27）: 短辺基準の 2√2 × 短辺（`FLOOR_DRIFT_SPRITE_LENGTH_RATIO`、R5）は横長画面（例 1280x375）で対角線 + 帯幅に届かないため、対角線 + 帯幅へ統一し比率定数は廃止 |
 | `NODE_BREATHE_ALPHA_MIN` / `_MAX` | 0.35 / 0.5 | 星図の呼吸の alpha 範囲 |
 | `NODE_BREATHE_PERIOD_MIN_MS` / `_MAX_MS` | 4000 / 7000 | 星図の呼吸の周期範囲（節点ごとに位相をずらす） |
 | `CHAIN_CONTRACT_START_T` | 0.85 | finale 前の収縮を始める連鎖進行率 |
@@ -448,6 +449,6 @@ finaleBass / finaleChord ────────┼→ fxIn → dry / generated
 | `FINALE_BASS_GAIN`（audio-tuning） | 0.34 | 終演ベースの gain（0.3 から） |
 | `FINALE_CHORD_DECAY_SECONDS_BASE` / `_T_FACTOR`（audio-tuning） | 4.8 / 1.7 | 終演和音の減衰秒 = base + factor × t（最大 6.5） |
 
-移行メモ（第 2 強化ラウンド）: `PLACE_CLICK_HZ`（固定 900Hz）は音階度ピッチ化により参照しなくなる見込みだが、既存キー保持ルールにより削除しない（legacy 扱いへ移行）。`FLOOR_DRIFT_*` は reduced-motion では周期計算へ進めても位相を固定する（帯は静止したまま存在）。正本更新 R4（2026-09-27）: `FLOOR_DRIFT_ALPHA_MAX` を 0.04 → 0.10 へ引き上げ、帯の濃度プロファイルを線形から raised cosine（両端で勾配 0・中心で最大）へ変更。`FLOOR_DRIFT_PERIOD_MS` 24000 と `FLOOR_DRIFT_WIDTH_RATIO` 0.3 は変更なし。引き上げの理由と参考数値は `art-direction.md` §7.1。
+移行メモ（第 2 強化ラウンド）: `PLACE_CLICK_HZ`（固定 900Hz）は音階度ピッチ化により参照しなくなる見込みだが、既存キー保持ルールにより削除しない（legacy 扱いへ移行）。`FLOOR_DRIFT_*` は reduced-motion では周期計算へ進めても位相を固定する（帯は静止したまま存在）。正本更新 R4（2026-09-27）: `FLOOR_DRIFT_ALPHA_MAX` を 0.04 → 0.10 へ引き上げ、帯の濃度プロファイルを線形から raised cosine（両端で勾配 0・中心で最大）へ変更。`FLOOR_DRIFT_PERIOD_MS` 24000 と `FLOOR_DRIFT_WIDTH_RATIO` 0.3 は変更なし。引き上げの理由と参考数値は `art-direction.md` §7.1。正本更新 R5（2026-09-27）: スプライトを「帯幅 × 1.5 の正方形」から長手を拡張した長方形へ変更（帯幅と濃度は不変）。正本更新 R6（2026-09-27）: 長手を「ビューポート対角線 + 帯幅」へ統一し、比率定数 `FLOOR_DRIFT_SPRITE_LENGTH_RATIO` は廃止（上の表のとおり、長手の式は main.ts の `buildDriftBandSprite` が持つ）。合成順は「静的焼き付け層（遠景・L1〜L3・trail 含む）の上・板の下」へ統一。
 
 移行メモ: 正本旧 §10 記載の `FINALE_AFTERGLOW_MS`（余韻の静寂）は、実装が bloom 系の時間だけで終演を構成するため採用しない。`TRACING_FOLLOW_DELAY_MS` は仮板列が指へ即時追従（§3.2）のため採用しない。`SLEEPING_LIGHT_RADIUS_PX` / `SLEEPING_LIGHT_ALPHA` は配列型の想定だったが、実装は MIN/MAX 型と「基準値 + 明滅振幅 + 覚醒加算」の合成へ置き換わっている（上の表のとおり）。`SHADOW_OFFSET_PX` は `SHADOW_OFFSET_X_PX` / `_Y_PX` へ分割。`DRAW_FORBIDDEN_MARGIN_PX` は既存の `INPUT_EDGE_INSET_PX` が同一の役割を担うため新設しない。

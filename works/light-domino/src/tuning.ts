@@ -260,6 +260,10 @@ export const FLOOR_DRIFT_PERIOD_MS = 24000;
 export const FLOOR_DRIFT_ALPHA_MAX = 0.10;
 /** ドリフト帯の幅 = min(w, h) × この値 */
 export const FLOOR_DRIFT_WIDTH_RATIO = 0.3;
+// 旧・ドリフト帯スプライト長手定数（R5 の FLOOR_DRIFT_SPRITE_LENGTH_RATIO）の跡。長手は
+// ビューポート対角線 + 帯幅（main.ts の buildDriftBandSprite で計算。帯を 45 度回転してどの位相でも
+// 画面全体を横切らせるため対角線 + 帯幅を下回らない。N-MF-02: 短辺基準の 2√2 × 短辺は横長画面で
+// 対角線 + 帯幅に届かないため廃止。帯幅方向の raised cosine は不変）
 /** 星図の呼吸の alpha 範囲（確定節点が intro / settled 静置で脈動する） */
 export const NODE_BREATHE_ALPHA_MIN = 0.35;
 export const NODE_BREATHE_ALPHA_MAX = 0.5;

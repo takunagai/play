@@ -672,21 +672,25 @@ new P5((p: P5) => {
     ctx.fillRect(0, 0, p.width, p.height);
   };
 
-  /** 照りドリフト帯（coolGlow・alpha ≤ 0.10・帯幅 = min(w,h) × 0.3・raised cosine の濃度）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。 */
+  /** 照りドリフト帯（coolGlow・alpha ≤ 0.10・帯幅 = min(w,h) × 0.3・raised cosine の濃度）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。
+   *  形状は幅 = 帯幅・長手 = ビューポート対角線 + 帯幅の長方形。45 度回転して帯の中心線（x + y = travel）
+   *  上へ置くため、どの位相でも長手が画面の対角線以上を覆い、帯が画面全面を横切る（N-MF-02）。
+   *  旧・帯幅 × 1.5 の正方形は長手が足りず帯が画面上端の短い菱形に留まっていた（N-V-01） */
   const buildDriftBandSprite = (): void => {
     const shortEdge = Math.min(p.width, p.height);
     const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
-    // 帯は 45 度で回転して転画するため、スプライトは正方形（一辺 = 帯幅の 1.5 倍。回転の丸めを吸収する）
-    const size = Math.max(2, Math.ceil(bandWidth * 1.5));
+    // 帯の幅方向は従来どおり raised cosine。長手方向は一様（回転の丸めを吸収する余白を両端に残す）
+    const width = Math.max(2, Math.ceil(bandWidth));
+    const length = Math.max(2, Math.ceil(Math.hypot(p.width, p.height) + bandWidth));
     if (!driftBandSprite) driftBandSprite = document.createElement("canvas");
-    if (driftBandSprite.width !== size || driftBandSprite.height !== size) {
-      driftBandSprite.width = size;
-      driftBandSprite.height = size;
+    if (driftBandSprite.width !== width || driftBandSprite.height !== length) {
+      driftBandSprite.width = width;
+      driftBandSprite.height = length;
     }
     const ctx = driftBandSprite.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, size, size);
+    ctx.clearRect(0, 0, width, length);
     // 濃度は raised cosine（正本 §7.1: 両端で勾配 0・中心で最大 = (1+cos(π·d))/2）。
     // canvas の線形グラデは stop 間を直線補間するため、半帯 8 分割の colorStop で近似する
     const gradient = ctx.createLinearGradient(-bandWidth / 2, 0, bandWidth / 2, 0);
@@ -698,9 +702,9 @@ new P5((p: P5) => {
       gradient.addColorStop(i / 16, `${PALETTE_COOL_GLOW}${alphaHex}`);
     }
     ctx.save();
-    ctx.translate(size / 2, size / 2);
+    ctx.translate(width / 2, length / 2);
     ctx.fillStyle = gradient;
-    ctx.fillRect(-bandWidth / 2, -size / 2, bandWidth, size);
+    ctx.fillRect(-bandWidth / 2, -length / 2, bandWidth, length);
     ctx.restore();
   };
 
@@ -1080,24 +1084,6 @@ new P5((p: P5) => {
     repaintFloorGlowLayer(chainProgress, contractAmount);
     ctx.globalAlpha = 1;
     if (floorGlowLayer) ctx.drawImage(floorGlowLayer, 0, 0);
-    // 床の照りのドリフト（正本 art-direction §7.1・architecture §7.1 の 6）: 静的層の上・板の下。
-    // coolGlow の斜めの帯（alpha ≤ 0.10・帯幅 = min(w,h) × 約 0.3・raised cosine の濃度）が 24 秒周期で床を線形に横切る。
-    // 影の方向は変えず、L2 格子は動かさない。reduced-motion では位相を固定して帯は存在させる。
-    // 60fps 予算: 帯はリサイズ時に焼いたスプライトの回転転画だけ（毎フレームのグラデ生成・全面塗りを避ける）
-    if (driftBandSprite) {
-      const shortEdge = Math.min(p.width, p.height);
-      const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
-      const span = p.width + p.height + bandWidth * 2;
-      const phase = prefersReducedMotion ? 0.25 : (nowMs % FLOOR_DRIFT_PERIOD_MS) / FLOOR_DRIFT_PERIOD_MS;
-      const travel = span * phase - bandWidth;
-      // 帯の中心線（x - y = travel の 45 度の直線）上にスプライト中心を置いて回転転画する
-      ctx.save();
-      ctx.translate(travel, 0);
-      ctx.rotate(Math.PI / 4);
-      ctx.globalAlpha = 1;
-      ctx.drawImage(driftBandSprite, -driftBandSprite.width / 2, -driftBandSprite.height / 2);
-      ctx.restore();
-    }
     if (gridLayer) ctx.drawImage(gridLayer, 0, 0);
     ctx.restore();
 
@@ -1137,6 +1123,36 @@ new P5((p: P5) => {
 
     // 周辺減光は静的層の 1 枚を転画するだけ（正本 §7.3）。
     if (vignetteLayer) ctx.drawImage(vignetteLayer, 0, 0);
+    // 床の照りのドリフト（正本 art-direction §7.1・architecture §7.1 の 6）: 静的層（遠景・L1〜L3・trail）の上・板の下。
+    // coolGlow の斜めの帯（alpha ≤ 0.10・帯幅 = min(w,h) × 約 0.3・raised cosine の濃度）が 24 秒周期で床を線形に横切る。
+    // N-MF-01: 旧実装は L2 格子より前に置かれており L2/L3 が帯を上書きしていたため、静的層すべての後へ移動した。
+    // 影の方向は変えず、L2 格子は動かさない。reduced-motion では位相を固定して帯は存在させる。
+    // 60fps 予算: 帯はリサイズ時に焼いたスプライトの回転転画だけ（毎フレームのグラデ生成・全面塗りを避ける）
+    if (driftBandSprite) {
+      const shortEdge = Math.min(p.width, p.height);
+      const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
+      const span = p.width + p.height + bandWidth * 2;
+      const phase = prefersReducedMotion ? 0.25 : (nowMs % FLOOR_DRIFT_PERIOD_MS) / FLOOR_DRIFT_PERIOD_MS;
+      const travel = span * phase - bandWidth;
+      // 帯の中心線は x + y = travel の 45 度の直線。スプライト中心はこの中心線のうち
+      // viewport（x ∈ [0,w]・y ∈ [0,h]）と交わる区間の中点へ置く。travel < 0（帯が右下へ
+      // 完全に退いた）と travel > w + h（左上へ完全に退いた）では前後の線形区間をそのまま延長する。
+      // clamp すると帯の出入り端で中心が端に張り付き最大 1 周期の 6.7% 静止するため、
+      // 「24 秒周期で床を線形に横切る」を保つ（R6-V-01: 旧 translate(travel, 0) は中心を
+      // 常に y=0 へ固定し、帯の到達 y が (L+W)/(2√2) に抑えられて下端へ届かなかった）
+      // 可視区間 [uMin, uMax]（u = x = travel - y）とその中点を解いて translate へ
+      const uLo = Math.min(travel, travel - p.height); // = travel - max(y)
+      const uHi = Math.max(travel, travel - p.height); // = travel - min(y)
+      const cx = (Math.max(0, Math.min(p.width, uLo)) + Math.min(p.width, Math.max(0, uHi))) / 2;
+      const cy = travel - cx;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.PI / 4);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(driftBandSprite, -driftBandSprite.width / 2, -driftBandSprite.height / 2);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
 
     // 星図の呼吸（正本 art-direction §7.2）: 呼吸が動く状態（chain / 確定前 finale を除く全状態）では
     // trail レイヤーを毎フレーム焼き直す。凍結中（chain と確定前 finale）は焼き直さず転画だけ。
