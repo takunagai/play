@@ -70,7 +70,6 @@ import {
   FINALE_SHOCKWAVE_T_FACTOR,
   FLOOR_DRIFT_ALPHA_MAX,
   FLOOR_DRIFT_PERIOD_MS,
-  FLOOR_DRIFT_SPRITE_LENGTH_RATIO,
   FLOOR_DRIFT_WIDTH_RATIO,
   FLOOR_GLOW_ALPHA_END,
   FLOOR_GLOW_ALPHA_START,
@@ -674,15 +673,15 @@ new P5((p: P5) => {
   };
 
   /** 照りドリフト帯（coolGlow・alpha ≤ 0.10・帯幅 = min(w,h) × 0.3・raised cosine の濃度）をスプライトへ 1 回焼く。リサイズ時だけ呼ぶ。
-   *  形状は幅 = 帯幅・長手 = FLOOR_DRIFT_SPRITE_LENGTH_RATIO × 短辺の長方形。45 度回転して
-   *  translate(travel, 0) で転画するため、どの位相でも長手が画面内の中心線分（最長 = √2 × 短辺）を
-   *  覆い切る。旧・帯幅 × 1.5 の正方形は長手が足りず帯が画面上端の短い菱形に留まっていた（N-V-01） */
+   *  形状は幅 = 帯幅・長手 = ビューポート対角線 + 帯幅の長方形。45 度回転して translate(travel, 0) で
+   *  転画するため、どの位相でも長手が画面の対角線以上を覆い、帯が画面全面を横切る（N-MF-02）。
+   *  旧・帯幅 × 1.5 の正方形は長手が足りず帯が画面上端の短い菱形に留まっていた（N-V-01） */
   const buildDriftBandSprite = (): void => {
     const shortEdge = Math.min(p.width, p.height);
     const bandWidth = shortEdge * FLOOR_DRIFT_WIDTH_RATIO;
     // 帯の幅方向は従来どおり raised cosine。長手方向は一様（回転の丸めを吸収する余白を両端に残す）
     const width = Math.max(2, Math.ceil(bandWidth));
-    const length = Math.max(2, Math.ceil(shortEdge * FLOOR_DRIFT_SPRITE_LENGTH_RATIO + bandWidth * 0.5));
+    const length = Math.max(2, Math.ceil(Math.hypot(p.width, p.height) + bandWidth));
     if (!driftBandSprite) driftBandSprite = document.createElement("canvas");
     if (driftBandSprite.width !== width || driftBandSprite.height !== length) {
       driftBandSprite.width = width;
@@ -1135,7 +1134,7 @@ new P5((p: P5) => {
       const span = p.width + p.height + bandWidth * 2;
       const phase = prefersReducedMotion ? 0.25 : (nowMs % FLOOR_DRIFT_PERIOD_MS) / FLOOR_DRIFT_PERIOD_MS;
       const travel = span * phase - bandWidth;
-      // 帯の中心線（x - y = travel の 45 度の直線）上にスプライト中心を置いて回転転画する
+      // 帯の中心線（x + y = travel の 45 度の直線）上にスプライト中心を置いて回転転画する
       ctx.save();
       ctx.translate(travel, 0);
       ctx.rotate(Math.PI / 4);
