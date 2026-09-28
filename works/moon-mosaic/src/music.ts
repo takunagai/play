@@ -1,6 +1,6 @@
 // ============================================================
-// music.ts ─ 音階と音程の決定（音響と視覚の共通定義）
-// work.json の scale（語彙）と対応させる。
+// music.ts ─ D ドリアンと、回収数から音階度を決める純粋関数（音響と視覚の共通定義）
+// 正本: docs/architecture.md §7。work.json の scale（語彙）と対応させる。
 // ============================================================
 
 export const SCALES = {
@@ -15,17 +15,39 @@ export const SCALES = {
 export type ScaleName = keyof typeof SCALES;
 
 export const SCALE: ScaleName = "ドリアン";
-export const BASE_MIDI = 57; // A3
-export const OCTAVE_SPAN = 3;
+/** 基音 D4（MIDI 62）。正本 §7 */
+export const BASE_MIDI = 62;
+/** 完成へ向かって上る音域の上限（オクターブ）。正本 §7「2 オクターブ以内」 */
+export const OCTAVE_SPAN = 2;
 
-/** 画面上の位置（0..1、左 → 右で上がる）から MIDI 番号と度数を決める */
-export function noteForPosition(normalizedX: number): { midi: number; degree: number } {
-  const steps = SCALES[SCALE];
-  const total = steps.length * OCTAVE_SPAN;
-  const index = Math.min(total - 1, Math.max(0, Math.floor(normalizedX * total)));
-  const degree = index % steps.length;
-  const octave = Math.floor(index / steps.length);
-  return { midi: BASE_MIDI + 12 * octave + steps[degree], degree };
+/**
+ * 回収数 collected（0..FRAGMENT_COUNT）を音階のインデックスへ写す。
+ * 正本 §7: collected → [0,2,3,5,7,9,10] へ写し、完成へ向かって単調に上げる。
+ * ステップ = FRAGMENT_COUNT / 目標列の長さ で等間隔に分散する。
+ */
+export const COLLECTED_TO_STEP = [0, 2, 3, 5, 7, 9, 10] as const;
+
+/** 回収数（1..12 を想定）からスケール内ステップ（0 始まり、単調非減少）を返す純粋関数 */
+export function stepForCollected(collected: number, fragmentCount: number): number {
+  const steps = COLLECTED_TO_STEP;
+  const clamped = Math.min(fragmentCount, Math.max(1, collected));
+  const ratio = (clamped - 1) / Math.max(1, fragmentCount - 1); // 0..1
+  const last = steps.length - 1;
+  return Math.round(ratio * last);
+}
+
+/** ステップ（スケール内インデックス、2 オクターブ内を巡回）から MIDI 番号を返す純粋関数 */
+export function midiForStep(step: number): number {
+  const scale = SCALES[SCALE];
+  const clamped = Math.max(0, step);
+  const octave = Math.floor(clamped / scale.length);
+  const degree = clamped % scale.length;
+  return BASE_MIDI + 12 * Math.min(OCTAVE_SPAN - 1, octave) + scale[degree];
+}
+
+/** 回収数から MIDI 番号を決める（音響の place / pulse の共通入口） */
+export function midiForCollected(collected: number, fragmentCount: number): number {
+  return midiForStep(stepForCollected(collected, fragmentCount));
 }
 
 export function midiToFrequency(midi: number): number {
