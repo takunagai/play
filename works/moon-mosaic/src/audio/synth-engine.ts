@@ -5,8 +5,8 @@
 //   gatherDrone ────────────────→ droneBus ────────┼→ fxIn → dry / 生成 IR Convolver
 //   revealGlass / rimClicks / body → completionBus ┘        → Compressor → master → Analyser → destination
 // 音声ファイル・外部 CDN は使わない。残響 IR は起動時に生成する。
-// hush では transientBus / droneBus を 25ms で -60dB、Convolver の戻りを 60ms で絞り、
-// completionBus は閉じたまま revealAtMs に 3 音を同時に開く。
+// hush では transientBus / droneBus を 25ms で -60dB、Convolver の戻りを 60ms で絞る。
+// 完成音 3 音は AudioContext 時刻で revealAtMs に直接スケジュールし、reveal と同時に鳴る。
 // ============================================================
 
 import type { AudioEngine, CompletionSchedule, FragmentEvent } from "./engine";
@@ -352,12 +352,12 @@ export class SynthAudioEngine implements AudioEngine {
     this.hushed = true;
   }
 
-  /** completionBus を開けて 3 音を同時開始（正本 §7） */
-  private fireCompletion(): void {
+  /** startS（AudioContext 時刻）に 3 音を同時開始する（正本 §7） */
+  private fireCompletion(startS: number): void {
     const context = this.context;
     const completionBus = this.completionBus;
     if (!context || !completionBus) return;
-    const now = context.currentTime;
+    const now = startS;
     // 高いグラスハープ（D6/A6 と非整数倍音。attack 18ms、decay 4.8s）
     for (const midi of REVEAL_GLASS_MIDIS) {
       const frequency = midiToFrequency(midi);
@@ -446,24 +446,10 @@ export class SynthAudioEngine implements AudioEngine {
     };
     if (this.isWired && this.context) {
       this.enterHush();
-      // completionBus は閉じたまま待ち、revealAtMs に 3 音を同時に開く（正本 §7）
+      // 完成音 3 音は AudioContext 時刻で revealAt に直接スケジュールする（レビュー V-2）。
+      // 無音タイマー（音声出力への接続は gain 0 を含め一切不可）も onended 遅延方式も使わない
       const delayS = Math.max(0, revealAtMs - performance.now()) / 1000;
-      const context = this.context;
-      const opener = context.createGain();
-      opener.gain.value = 1;
-      void opener;
-      const fire = (): void => {
-        this.fireCompletion();
-      };
-      // AudioContext 時刻で正確に開く
-      const startAt = context.currentTime + delayS;
-      const timer = context.createOscillator();
-      timer.onended = fire;
-      timer.connect(context.createGain()).connect(context.destination);
-      const silentGain = timer.connect(context.createGain()) as GainNode;
-      silentGain.gain.value = 0;
-      timer.start(startAt);
-      timer.stop(startAt + 0.05);
+      this.fireCompletion(this.context.currentTime + delayS);
     }
     return schedule;
   }

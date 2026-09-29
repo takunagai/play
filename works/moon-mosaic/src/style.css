@@ -3,8 +3,8 @@
    ============================================================ */
 
 :root {
-  --palette-base: #07070d;
-  --palette-text: #f4f2ff;
+  --palette-base: #08111f;
+  --palette-text: #eaf6ff;
   color-scheme: dark;
 }
 
@@ -63,7 +63,7 @@ body {
   gap: 12px;
   padding: 24px;
   text-align: center;
-  background: rgba(7, 7, 13, 0.35);
+  background: rgba(8, 17, 31, 0.35);
   transition: opacity 0.5s ease;
   cursor: pointer;
 }
@@ -100,8 +100,8 @@ body {
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
-  color: #c6ff00;
-  background: rgba(0, 0, 0, 0.55);
+  color: #1d3a52;
+  background: rgba(8, 17, 31, 0.55);
   border-radius: 6px;
   pointer-events: none;
 }
