@@ -4,6 +4,8 @@
 // 正本: docs/architecture.md §6「AudioEngine 契約」。
 // ============================================================
 
+import { RING_TRAVEL_MS, SWAY_HOLD_MS } from "../tuning";
+
 export interface FragmentEvent {
   /** 0..1（画面幅で正規化） */
   x: number;
@@ -21,7 +23,10 @@ export interface CompletionSchedule {
   /** performance.now() と同じ時刻系。hush → reveal の切替時刻 */
   revealAtMs: number;
   ringEndAtMs: number;
+  /** sway の開始時刻（reveal + 900ms）。この時刻に sway の長さを加算しない */
   swayAtMs: number;
+  /** sway の終了＝spawning の開始時刻（swayAtMs + 2400ms）。main.ts は swayAtMs へ再加算しない */
+  spawningAtMs: number;
 }
 
 export interface AudioEngine {
@@ -61,10 +66,16 @@ export class NoopAudioEngine implements AudioEngine {
   follow(): void {}
   place(): void {}
   pulse(): void {}
-  /** ?mute でも視覚の間を変えない（正本 §6） */
+  /** ?mute でも視覚の間を変えない（正本 §6。synth-engine.complete() と同じ時刻式） */
   complete(): CompletionSchedule {
     const now = performance.now();
-    return { revealAtMs: now + 150, ringEndAtMs: now + 150 + 900, swayAtMs: now + 150 + 900 + 2400 };
+    const revealAtMs = now + 150;
+    return {
+      revealAtMs,
+      ringEndAtMs: revealAtMs + RING_TRAVEL_MS,
+      swayAtMs: revealAtMs + RING_TRAVEL_MS,
+      spawningAtMs: revealAtMs + RING_TRAVEL_MS + SWAY_HOLD_MS,
+    };
   }
   resetCycle(): void {}
   getAmp(): number {

@@ -7,7 +7,7 @@
 import P5 from "p5";
 import "./style.css";
 
-import { createAudioEngine, type AudioEngine } from "./audio/engine";
+import { createAudioEngine, type AudioEngine, type CompletionSchedule } from "./audio/engine";
 import { createFrameCounter, installArtHook } from "./art-hook";
 import { Fragment, clamp, lerp, makeRandom } from "./fragment";
 import { midiForCollected } from "./music";
@@ -51,7 +51,6 @@ import {
   STARPATH_MAX,
   STARPATH_NODE_RADIUS_PX,
   SWAY_AMPLITUDE_PX,
-  SWAY_HOLD_MS,
   SWAY_SPATIAL_FREQ,
   SWAY_TEMPORAL_FREQ,
   TRAIL_ALPHA,
@@ -118,8 +117,8 @@ let pointerPos: { x: number; y: number } | null = null;
 let smoothedSpeed = 0;
 let lastPointerMoveMs = 0;
 
-/** 完成タイムライン（complete() が返す時刻。正本 §6） */
-let schedule: { revealAtMs: number; ringEndAtMs: number; swayAtMs: number } | null = null;
+/** 完成タイムライン（complete() が返す時刻。正本 §6。spawningAtMs は sway の終了＝spawning の開始時刻） */
+let schedule: CompletionSchedule | null = null;
 let spawnStartMs = 0;
 let collectedCount = 0;
 /** 8 分拍 */
@@ -131,6 +130,8 @@ const fledAnnounced = new Set<number>();
 let moonRevealStartMs = 0;
 /** 継ぎ目を薄くする開始時刻 */
 let seamFadeStartMs = 0;
+/** 新周期の開始直後、drift アンカーを欠片の現位置へ据え置く期限（ms） */
+let driftAnchorFreezeUntilMs = 0;
 
 installArtHook({
   getAmp: () => lastAmp,
@@ -144,7 +145,7 @@ function addRipple(x: number, y: number, strength: number): void {
   ripples.push({ x, y, bornMs: performance.now(), strength });
 }
 
-/** spawn: 未配置の欠片を新しい外周領域へ出す（正本 §3 spawning） */
+/** spawn: 全欠片（placed 含む）を新しい外周領域へ出し、新周期の drifting へ戻す（正本 §3 spawning） */
 function spawnFragments(width: number, height: number): void {
   const slotAssignments = [...slots];
   // seeded shuffle で欠片へ割り当てる
@@ -154,7 +155,8 @@ function spawnFragments(width: number, height: number): void {
   }
   let slotIndex = 0;
   for (const fragment of fragments) {
-    if (fragment.phase === "placed") continue;
+    // placed も含めて全欠片を新周期へ戻す。placed を除外すると完成後の周期で未配置が 0 枚のまま
+    // gathering が即完成判定になり、hush → reveal が入力なしで無限反復する（レビュー V-1）
     fragment.assignSlot(slotAssignments[slotIndex % slotAssignments.length]);
     slotIndex++;
     // 別の外周領域へ出す（前回の位置から離す）
@@ -271,15 +273,22 @@ new P5((p: P5) => {
     if (schedule) {
       if (state === "hush" && nowMs >= schedule.revealAtMs) beginReveal(nowMs);
       else if (state === "reveal" && nowMs >= schedule.ringEndAtMs) beginSway(nowMs);
-      else if (state === "sway" && nowMs >= schedule.swayAtMs + SWAY_HOLD_MS) beginSpawning(nowMs);
+      // sway の長さは schedule.spawningAtMs（sway 開始 + 2400ms）で決める。main 側で swayAtMs に再加算しない（レビュー MF-1）
+      else if (state === "sway" && nowMs >= schedule.spawningAtMs) beginSpawning(nowMs);
     }
     if (state === "spawning" && nowMs - spawnStartMs >= SPAWN_MS) {
+      // 周期の初期化: 収集系の状態（回収数・波紋・追従航跡・逃避済みフラグ）を戻す。星図（starPaths）は残す
       collectedCount = 0;
       ripples = [];
       liveTrails.clear();
+      fledAnnounced.clear();
       schedule = null;
       startCycle(p.width, p.height);
       state = "gathering";
+      // 新周期の漂いのアンカーを今の欠片位置へ据え置く。placed から戻した欠片の driftPosition は
+      // 月の中心の近くになり、spawn 直後から捕捉域内で完成判定（hush）が起きて無限反復する（レビュー V-1）。
+      // 入力が無くても hush に入らないよう、漂いの再設置を最初の 1 フレームだけ遅らせる
+      driftAnchorFreezeUntilMs = nowMs + SPAWN_MS;
     }
 
     // ---- 入力の速度計算（EMA。正本 §4.1）----
@@ -321,6 +330,7 @@ new P5((p: P5) => {
       moonRadius,
       frozen,
       driftSpeedScale,
+      driftAnchorFreeze: nowMs < driftAnchorFreezeUntilMs,
     };
     for (const fragment of fragments) {
       fragment.update(frameInput);

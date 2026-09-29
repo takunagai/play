@@ -126,6 +126,8 @@ export interface FrameInput {
   frozen: boolean;
   /** 漂いの時間倍率（prefers-reduced-motion で 0.5） */
   driftSpeedScale: number;
+  /** 新周期の開始直後は drift アンカーを現位置へ据え置く（spawn 直後の完成判定を防ぐ） */
+  driftAnchorFreeze: boolean;
 }
 
 export class Fragment {
@@ -150,6 +152,8 @@ export class Fragment {
   private settleFrom = { x: 0, y: 0, angle: 0 };
   private driftPhase: number;
   private driftPeriod: number;
+  /** 漂いのアンカー（周期の途中で据え置いた現位置）。null は画面比の既定アンカー */
+  private driftAnchor: { x: number; y: number } | null = null;
   /** settling 中に通過した点（StarPath 化のため main.ts が読む） */
   pathPoints: Array<{ x: number; y: number }> = [];
 
@@ -167,16 +171,30 @@ export class Fragment {
     return this.phase === "drifting" || this.phase === "fleeing" || this.phase === "following";
   }
 
-  /** 画面上の漂いの中心（再現可能な低周波 2 本。正本 §4.5） */
-  driftPosition(nowMs: number, width: number, height: number, speedScale: number): { x: number; y: number } {
+  /** 画面上の漂いの中心（再現可能な低周波 2 本。正本 §4.5）。freeze 中は前回の中心（現位置）を維持 */
+  driftPosition(nowMs: number, width: number, height: number, speedScale: number, freeze = false): { x: number; y: number } {
+    if (freeze) {
+      if (this.driftAnchor === null) {
+        // spawn 直後の 1 回だけ現位置をアンカーへ据え、以後はそこを基準に漂う
+        this.driftAnchor = { x: this.x, y: this.y };
+      }
+      return this.driftAnchor;
+    }
+    const anchor = this.driftAnchor;
     const timeS = (nowMs / 1000) * speedScale;
     const baseAngle = this.driftPhase;
     const dx = Math.sin((timeS / this.driftPeriod) * Math.PI * 2 + baseAngle);
     const dy = Math.cos((timeS / (this.driftPeriod * 1.37)) * Math.PI * 2 + baseAngle * 1.7);
     const margin = DRIFT_AMPLITUDE_PX + EDGE_INSET_PX + 40;
+    const base = anchor
+      ? { x: clamp(anchor.x, margin, width - margin), y: clamp(anchor.y, margin, height - margin) }
+      : {
+          x: lerp(margin, width - margin, 0.5 + 0.42 * Math.sin(baseAngle * 3.1 + this.index * 0.7)),
+          y: lerp(margin, height - margin, 0.5 + 0.42 * Math.cos(baseAngle * 2.3 + this.index * 1.3)),
+        };
     return {
-      x: lerp(margin, width - margin, 0.5 + 0.42 * Math.sin(baseAngle * 3.1 + this.index * 0.7)) + dx * DRIFT_AMPLITUDE_PX * 0.6,
-      y: lerp(margin, height - margin, 0.5 + 0.42 * Math.cos(baseAngle * 2.3 + this.index * 1.3)) + dy * DRIFT_AMPLITUDE_PX,
+      x: base.x + dx * DRIFT_AMPLITUDE_PX * 0.6,
+      y: base.y + dy * DRIFT_AMPLITUDE_PX,
     };
   }
 
@@ -191,8 +209,8 @@ export class Fragment {
     const dtS = clamp(input.dtMs / 1000, DT_MIN_S, DT_MAX_S);
 
     if (this.phase === "drifting" || this.phase === "fleeing") {
-      // 漂いの目標位置へ弱く引き戻す
-      const drift = this.driftPosition(input.nowMs, input.width, input.height, input.driftSpeedScale);
+      // 漂いの目標位置へ弱く引き戻す（新周期の直後は現位置をアンカーに据え置く）
+      const drift = this.driftPosition(input.nowMs, input.width, input.height, input.driftSpeedScale, input.driftAnchorFreeze);
       this.vx += (drift.x - this.x) * 0.9 * dtS;
       this.vy += (drift.y - this.y) * 0.9 * dtS;
     }

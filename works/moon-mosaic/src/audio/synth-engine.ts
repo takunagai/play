@@ -11,6 +11,7 @@
 
 import type { AudioEngine, CompletionSchedule, FragmentEvent } from "./engine";
 import { midiToFrequency } from "../music";
+import { RING_TRAVEL_MS, SWAY_HOLD_MS } from "../tuning";
 import {
   BODY_ATTACK_MS,
   BODY_DECAY_S,
@@ -437,8 +438,11 @@ export class SynthAudioEngine implements AudioEngine {
     const revealAtMs = nowMs + 150;
     const schedule: CompletionSchedule = {
       revealAtMs,
-      ringEndAtMs: revealAtMs + 900,
-      swayAtMs: revealAtMs + 900 + 2400,
+      // swayAtMs は sway の開始時刻（reveal 終了）。spawningAtMs は sway の終了＝spawning の開始時刻。
+      // main.ts 側で swayAtMs へ再加算しない（レビュー MF-1）。正本 §3: reveal 900ms → sway 2400ms
+      ringEndAtMs: revealAtMs + RING_TRAVEL_MS,
+      swayAtMs: revealAtMs + RING_TRAVEL_MS,
+      spawningAtMs: revealAtMs + RING_TRAVEL_MS + SWAY_HOLD_MS,
     };
     if (this.isWired && this.context) {
       this.enterHush();
