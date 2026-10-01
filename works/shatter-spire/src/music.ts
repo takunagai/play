@@ -1,6 +1,6 @@
 // ============================================================
-// music.ts ─ 音階と音程の決定（音響と視覚の共通定義）
-// work.json の scale（語彙）と対応させる。
+// music.ts ─ D ドリアンの音程と崩壊段から MIDI を求める純粋関数
+// work.json の scale「ドリアン」と対応。正本は docs/architecture.md 第 6 節。
 // ============================================================
 
 export const SCALES = {
@@ -15,19 +15,57 @@ export const SCALES = {
 export type ScaleName = keyof typeof SCALES;
 
 export const SCALE: ScaleName = "ドリアン";
-export const BASE_MIDI = 57; // A3
-export const OCTAVE_SPAN = 3;
-
-/** 画面上の位置（0..1、左 → 右で上がる）から MIDI 番号と度数を決める */
-export function noteForPosition(normalizedX: number): { midi: number; degree: number } {
-  const steps = SCALES[SCALE];
-  const total = steps.length * OCTAVE_SPAN;
-  const index = Math.min(total - 1, Math.max(0, Math.floor(normalizedX * total)));
-  const degree = index % steps.length;
-  const octave = Math.floor(index / steps.length);
-  return { midi: BASE_MIDI + 12 * octave + steps[degree], degree };
-}
+/** D ドリアンのステップ（半音間隔）。正本 §6: [0, 2, 3, 5, 7, 9, 10] */
+export const SCALE_STEPS: readonly number[] = SCALES[SCALE];
+/** 基準音（D4） */
+export const BASE_MIDI = 62;
+/** 崩壊音列の上端（D6 付近） */
+export const COLLAPSE_TOP_MIDI = 86;
+/** 崩壊音列の下端（D3 付近） */
+export const COLLAPSE_BOTTOM_MIDI = 50;
 
 export function midiToFrequency(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+/**
+ * 崩壊段の MIDI。上段（rowIndex = 0）ほど高く、下段ほど低い。
+ * D6 付近から D3 付近まで単調下降し、音階外へ出さない（正本 §6）。
+ * previousMidi を渡すと、直前の段より高くならないよう単調非増加へ丸める。
+ */
+export function collapseMidi(rowIndex: number, rowCount: number, previousMidi: number | null = null): number {
+  const t = rowCount <= 1 ? 0 : Math.min(1, Math.max(0, rowIndex / (rowCount - 1)));
+  const continuous = COLLAPSE_TOP_MIDI + (COLLAPSE_BOTTOM_MIDI - COLLAPSE_TOP_MIDI) * t;
+  const midi = snapToScale(continuous);
+  if (previousMidi !== null && midi > previousMidi) return previousMidi;
+  return midi;
+}
+
+/** 連続的な MIDI 値を D ドリアンのいずれかの音へスナップする（最も近い音階内の音） */
+export function snapToScale(continuous: number): number {
+  const steps = SCALE_STEPS;
+  let best = BASE_MIDI;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let octave = -3; octave <= 4; octave++) {
+    for (const step of steps) {
+      const midi = BASE_MIDI + octave * 12 + step;
+      const distance = Math.abs(midi - continuous);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = midi;
+      }
+    }
+  }
+  return best;
+}
+
+/** 砂に触れた位置（0..1）へ D ドリアン内の音を割り当てる。左ほど低い（正本 §4 sand/touch） */
+export function sandNoteMidi(normalizedX: number): number {
+  const steps = SCALE_STEPS;
+  const span = 2; // 2 オクターブ分の幅（D3 付近〜D5 付近の柔らかい音域）
+  const total = steps.length * span;
+  const index = Math.min(total - 1, Math.max(0, Math.floor(Math.min(1, Math.max(0, normalizedX)) * total)));
+  const octave = Math.floor(index / steps.length);
+  const degree = index % steps.length;
+  return BASE_MIDI - 12 + octave * 12 + steps[degree];
 }
