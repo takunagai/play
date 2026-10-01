@@ -1,0 +1,15 @@
+{
+  "slug": "shatter-spire",
+  "title": "Shatter Spire",
+  "date": "2026-10-02",
+  "origin": "autopilot",
+  "summary": "積み上がった光の結晶の塔を、ひと振りで斬り崩す",
+  "emotion": "癒し・瞑想",
+  "verb": "弾く・割る",
+  "tone": "ダーク＋ネオン",
+  "sound": "電子シンセ",
+  "scale": "ドリアン",
+  "thumbnail": "thumbnail.webp",
+  "license": "MIT",
+  "generatedImages": []
+}
