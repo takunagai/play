@@ -51,6 +51,7 @@ import {
   SAND_TOUCH_RATE_HZ,
   SETTLING_MAX_MS,
   SLIDE_MS,
+  SWIPE_CROSS_MARGIN_PX,
   SWIPE_MIN_LENGTH_PX,
   SWIPE_MIN_SPEED_PX_S,
   SWIPE_SHARP_SPEED_PX_S,
@@ -180,6 +181,10 @@ let regrowStartMs: number | null = null;
 // 入力
 let stroke: PointerStroke | null = null;
 let lastSandTouchAtMs = 0;
+/** intro 中の押下開始位置。pointerup で中央タップ判定に使う（MF-2） */
+let introPress: { x: number; y: number } | null = null;
+/** 中央タップとみなす半径（px）。塔幅に依らず画面寸法から決める */
+const INTRO_TAP_RADIUS_PX = 120;
 
 // 背景光（静的 offscreen。リサイズ時だけ焼き直す。正本 §7.1）
 let backdropLayer: HTMLCanvasElement | null = null;
@@ -250,22 +255,45 @@ function buildProgress(nowMs: number): number {
 // 切断の判定と実行
 // ============================================================
 
-/** 軌跡と塔（画面上の外接矩形）の交差を評価する。交差前後の軌跡長も返す */
-function evaluateSwipe(pointsPx: readonly StrokePoint[], frame: TowerFrame): { crosses: boolean; lengthPx: number; speedPxS: number; towerLocalPoints: Vec2[] } {
-  let lengthPx = 0;
+/**
+ * 軌跡と塔（画面上の外接矩形）の交差を評価する（正本 §3.2 の 3）。
+ * crosses: 塔内部に 2 点以上入った。marginBeforePx / marginAfterPx:
+ * 塔境界へ入る前・出た後の軌跡長（誤タップ除去。SWIPE_CROSS_MARGIN_PX と比較する）。
+ */
+function evaluateSwipe(pointsPx: readonly StrokePoint[], frame: TowerFrame): {
+  crosses: boolean;
+  lengthPx: number;
+  speedPxS: number;
+  marginBeforePx: number;
+  marginAfterPx: number;
+} {
+  const segmentLengths: number[] = [];
   for (let index = 1; index < pointsPx.length; index++) {
-    lengthPx += Math.hypot(pointsPx[index].x - pointsPx[index - 1].x, pointsPx[index].y - pointsPx[index - 1].y);
+    segmentLengths.push(Math.hypot(pointsPx[index].x - pointsPx[index - 1].x, pointsPx[index].y - pointsPx[index - 1].y));
   }
+  const lengthPx = segmentLengths.reduce((sum, length) => sum + length, 0);
   const durationS = Math.max(1e-3, (pointsPx[pointsPx.length - 1].atMs - pointsPx[0].atMs) / 1000);
   const speedPxS = lengthPx / durationS;
   const towerLocalPoints = pointsPx.map((point) => pxToLocal({ x: point.x, y: point.y }, frame));
-  // 塔のローカル外接矩形（x -0.5..0.5、y 0..1）との交差数
+  // 塔のローカル外接矩形（x -0.5..0.5、y 0..1）内外の遷移を辿り、内部区間の前後の軌跡長を足す
+  const isInside = (point: Vec2): boolean => point.x >= -0.5 && point.x <= 0.5 && point.y >= 0 && point.y <= 1;
+  let marginBeforePx = 0;
+  let marginAfterPx = 0;
   let insideCount = 0;
-  for (const point of towerLocalPoints) {
-    if (point.x >= -0.5 && point.x <= 0.5 && point.y >= 0 && point.y <= 1) insideCount++;
+  let seenInside = false;
+  for (let index = 0; index < towerLocalPoints.length; index++) {
+    const inside = isInside(towerLocalPoints[index]);
+    if (inside) {
+      insideCount++;
+      seenInside = true;
+    } else if (index > 0) {
+      const segment = segmentLengths[index - 1];
+      if (!seenInside) marginBeforePx += segment;
+      else marginAfterPx += segment;
+    }
   }
   const crosses = insideCount >= 2;
-  return { crosses, lengthPx, speedPxS, towerLocalPoints };
+  return { crosses, lengthPx, speedPxS, marginBeforePx, marginAfterPx };
 }
 
 /** 軌跡の塔近傍点へ最小二乗直線を当て、切断線（px 空間の単位法線と線上の点）を得る（正本 §3.2） */
@@ -317,9 +345,9 @@ function commitCut(pointsPx: readonly StrokePoint[]): void {
   if (!fitted) return;
 
   const evaluation = evaluateSwipe(pointsPx, frame);
-  // 有効条件（正本 §3.2）: 軌跡長 56px 以上、交差、平均速度 90px/s 以上。
+  // 有効条件（正本 §3.2 の 3）: 軌跡長 56px 以上、交差、交差前後に各 12px 以上、平均速度 90px/s 以上。
   // 閾値は誤操作除去用（verify の CDP タッチ実測が約 115px/s のため 180 では正規操作を拒む）
-  const hasMargin = evaluation.towerLocalPoints.length >= 2;
+  const hasMargin = evaluation.marginBeforePx >= SWIPE_CROSS_MARGIN_PX && evaluation.marginAfterPx >= SWIPE_CROSS_MARGIN_PX;
   if (!evaluation.crosses || evaluation.lengthPx < SWIPE_MIN_LENGTH_PX || evaluation.speedPxS < SWIPE_MIN_SPEED_PX_S || !hasMargin) {
     // 塔を外す / 短すぎる swipe は淡光だけ返す（正本 §3.2 の 6）
     const nearest = nearestCrystalPoint(pointsPx[pointsPx.length - 1]);
@@ -331,13 +359,15 @@ function commitCut(pointsPx: readonly StrokePoint[]): void {
   const sharpness = Math.min(1, Math.max(0, (evaluation.speedPxS - SWIPE_MIN_SPEED_PX_S) / (SWIPE_SHARP_SPEED_PX_S - SWIPE_MIN_SPEED_PX_S)));
   const { a, b } = lineToLocal(fitted.normal, fitted.point, frame);
 
-  // 切断線と交差するセルを上下へ分割する（正本 §3.3）
+  // 切断線と交差するセルを上下へ分割する（正本 §3.3）。
+  // tower.cells を「下側のみ」で置き換え、上半分は upperHalf へ分離する（V-1 修正:
+  // 旧実装は lowerPolys を描画モデルへ反映せず、崩壊後も元の塔が丸ごと残っていた）
   const upperCells: UpperHalf["cells"] = [];
-  const lowerPolys: Array<{ polygon: Vec2[]; isLight: boolean; row: number; mass: number }> = [];
+  const remainingCells: Tower["cells"] = [];
   for (const cell of tower.cells) {
     const side = classifyCell(cell, a, b);
     if (side === "lower") {
-      lowerPolys.push({ polygon: cell.polygon, isLight: cell.isLight, row: cell.row, mass: cell.mass });
+      remainingCells.push({ ...cell });
       continue;
     }
     if (side === "upper") {
@@ -350,11 +380,11 @@ function commitCut(pointsPx: readonly StrokePoint[]): void {
       const center = centroid(cell.polygon);
       const sideOfCenter = a.x * center.x + a.y * center.y - b;
       if (sideOfCenter >= 0) upperCells.push({ polygon: cell.polygon, isLight: cell.isLight, row: cell.row, mass: cell.mass });
-      else lowerPolys.push({ polygon: cell.polygon, isLight: cell.isLight, row: cell.row, mass: cell.mass });
+      else remainingCells.push({ ...cell });
       continue;
     }
     upperCells.push({ polygon: split.upper, isLight: cell.isLight, row: cell.row, mass: cell.mass * 0.5 });
-    lowerPolys.push({ polygon: split.lower, isLight: cell.isLight, row: cell.row, mass: cell.mass * 0.5 });
+    remainingCells.push({ polygon: split.lower, isLight: cell.isLight, row: cell.row, column: cell.column, mass: cell.mass * 0.5 });
   }
 
   if (upperCells.length === 0) {
@@ -363,6 +393,8 @@ function commitCut(pointsPx: readonly StrokePoint[]): void {
     if (nearest) facLights.push({ x: nearest.x, y: nearest.y, bornMs: performance.now() });
     return;
   }
+  // 生存モデルを下側断片へ置き換える（描画は drawTowerAndRemains が tower.cells を描く）
+  tower.cells = remainingCells;
 
   // 滑落方向: 切断面の接線方向の「低い側」。接線 = 法線を 90 度回転。
   // px 空間では y が下向き正なので、接線のうち y 成分が大きい向き（= 画面の下側）を採用する。
@@ -419,14 +451,15 @@ function shatterTopRow(): void {
   if (!upperHalf || !sand || !towerFrame) return;
   const cells = upperHalf.cells;
   if (cells.length === 0) return;
-  // 現在の滑落オフセットを考慮したセルの位置で、最も row の小さい（上の）段を選ぶ
-  let minRow = Number.POSITIVE_INFINITY;
-  for (const cell of cells) if (cell.row < minRow) minRow = cell.row;
+  // row は 0 = 最下段（tower.ts の定義）。残っているセルの最大 row が画面の最下段なので、
+  // そこから上へ向かって砕く（V-1 修正: 旧実装は最小 row を「上」として砕き、複製側も下段から崩れた）
+  let maxRow = Number.NEGATIVE_INFINITY;
+  for (const cell of cells) if (cell.row > maxRow) maxRow = cell.row;
   const remaining: typeof cells = [];
   const microCap = MICRO_SHARD_CAP_STEPS[quality.getLevel()];
   let microCount = fragments.filter((fragment) => fragment.isMicro).length;
   for (const cell of cells) {
-    if (cell.row === minRow) {
+    if (cell.row === maxRow) {
       // px 多角形の重心へ原点を寄せて欠片化する
       const center = centroid(cell.polygon);
       const big: Fragment = {
@@ -595,22 +628,32 @@ new P5((p: P5) => {
       (event: PointerEvent) => {
         if (!event.isPrimary) return;
         if (state === "intro") {
-          // 最初の中央タップは切断に使わない。ゲートを消して音を配線する（正本 §3.1）
-          gateEl?.classList.add("is-hidden");
-          audio.start().catch((error: unknown) => {
-            lastError = error instanceof Error ? error.message : String(error);
-          });
-          // 積み上がりが残っていれば短縮する
-          const progress = buildProgress(performance.now());
-          if (progress < 1) {
-            const remainingMs = (1 - progress) * towerBuildDurationMs;
-            towerBuildDurationMs = Math.min(towerBuildDurationMs, Math.max(INTRO_FAST_BUILD_MS, (performance.now() - (towerBuildStartMs ?? performance.now())) + Math.min(remainingMs, INTRO_FAST_BUILD_MS)));
-          }
-          state = "building";
+          // 導入ゲートの解除は「中央タップ・pointerup」契約（正本 §3.1・AGENTS.md）。
+          // pointerdown では解除せず、中央付近の押下開始だけを覚える（MF-2: 画面端の押し逃げで抜けない）
+          introPress = { x: event.clientX, y: event.clientY };
           return;
         }
         if (state === "ready") {
-          stroke = { points: [{ x: event.clientX, y: event.clientY, atMs: performance.now() }], lastRecordedAtMs: performance.now() };
+          const nowMs = performance.now();
+          // 光の砂への短い接触は ready でも受ける（正本 §3.4・MF-5）。
+          // 塔の外側の押下は砂扱い（押しのけ + note）、切断軌跡の開始と両立させる
+          if (sand) {
+            const local = towerFrame ? pxToLocal({ x: event.clientX, y: event.clientY }, towerFrame) : { x: 1, y: 1 };
+            const insideTower = local.x >= -0.5 && local.x <= 0.5 && local.y >= 0 && local.y <= 1;
+            if (!insideTower) {
+              pushGrains(sand, event.clientX, event.clientY, SAND_TOUCH_PUSH_PX);
+              if (nowMs - lastSandTouchAtMs > 1000 / SAND_TOUCH_RATE_HZ) {
+                lastSandTouchAtMs = nowMs;
+                audio.note({
+                  x: event.clientX / p.width,
+                  y: event.clientY / p.height,
+                  midi: sandNoteMidi(event.clientX / p.width),
+                  velocity: 0.5,
+                });
+              }
+            }
+          }
+          stroke = { points: [{ x: event.clientX, y: event.clientY, atMs: nowMs }], lastRecordedAtMs: nowMs };
           return;
         }
         if (state === "afterglow" && sand) {
@@ -634,6 +677,28 @@ new P5((p: P5) => {
     window.addEventListener(
       "pointermove",
       (event: PointerEvent) => {
+        if (state === "ready" && stroke && sand) {
+          // 砂の上をなぞっている間も押しのけと微音を続ける（正本 §3.4・MF-5）。切断軌跡の記録と並行
+          const nowMs = performance.now();
+          const last = stroke.points[stroke.points.length - 1];
+          const insideTowerNow = (() => {
+            if (!towerFrame) return false;
+            const local = pxToLocal({ x: event.clientX, y: event.clientY }, towerFrame);
+            return local.x >= -0.5 && local.x <= 0.5 && local.y >= 0 && local.y <= 1;
+          })();
+          if (!insideTowerNow) {
+            pushGrains(sand, event.clientX, event.clientY, SAND_TOUCH_PUSH_PX);
+            if (nowMs - lastSandTouchAtMs > 1000 / SAND_TOUCH_RATE_HZ && Math.hypot(event.clientX - last.x, event.clientY - last.y) >= 4) {
+              lastSandTouchAtMs = nowMs;
+              audio.note({
+                x: event.clientX / p.width,
+                y: event.clientY / p.height,
+                midi: sandNoteMidi(event.clientX / p.width),
+                velocity: 0.5,
+              });
+            }
+          }
+        }
         if (!event.isPrimary || !stroke) return;
         const nowMs = performance.now();
         const last = stroke.points[stroke.points.length - 1];
@@ -649,6 +714,30 @@ new P5((p: P5) => {
 
     const releasePointer = (event: PointerEvent): void => {
       if (!event.isPrimary) return;
+      if (state === "intro") {
+        // 中央タップ・pointerup で導入を抜ける（正本 §3.1・MF-2）。押下開始が中央付近だった時だけ
+        const press = introPress;
+        introPress = null;
+        if (!press) return;
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        const startedNearCenter = Math.hypot(press.x - centerX, press.y - centerY) <= INTRO_TAP_RADIUS_PX;
+        const endedNearCenter = Math.hypot(event.clientX - centerX, event.clientY - centerY) <= INTRO_TAP_RADIUS_PX * 1.5;
+        if (!startedNearCenter || !endedNearCenter) return;
+        // ゲートを消して音を配線する。最初の中央タップ自体は切断に使わない
+        gateEl?.classList.add("is-hidden");
+        audio.start().catch((error: unknown) => {
+          lastError = error instanceof Error ? error.message : String(error);
+        });
+        // 積み上がりが残っていれば短縮する
+        const progress = buildProgress(performance.now());
+        if (progress < 1) {
+          const remainingMs = (1 - progress) * towerBuildDurationMs;
+          towerBuildDurationMs = Math.min(towerBuildDurationMs, Math.max(INTRO_FAST_BUILD_MS, (performance.now() - (towerBuildStartMs ?? performance.now())) + Math.min(remainingMs, INTRO_FAST_BUILD_MS)));
+        }
+        state = "building";
+        return;
+      }
       if (stroke && state === "ready") {
         const pointsPx = stroke.points;
         stroke = null;
@@ -661,6 +750,7 @@ new P5((p: P5) => {
     window.addEventListener("pointercancel", (event) => {
       if (!event.isPrimary) return;
       stroke = null;
+      introPress = null;
     }, { passive: true });
 
     // 音声の再開は常駐リスナーで（雛形の契約。エンジン側でも設置済みだが、意図を明示して残す）
