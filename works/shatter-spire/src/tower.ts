@@ -5,7 +5,7 @@
 // 描画時に TowerFrame 経由で px へ戻す。リサイズは frame の張り替えだけで済む。
 // ============================================================
 
-import { CELL_VERTICES_MAX, CELL_VERTICES_MIN, CRYSTALS_PER_ROW_MAX, CRYSTALS_PER_ROW_MIN } from "./tuning";
+import { CELL_VERTICES_MAX, CELL_VERTICES_MIN, CRYSTALS_PER_ROW_MAX, CRYSTALS_PER_ROW_MIN } from "./tuning.ts";
 
 export interface Vec2 {
   x: number;
@@ -145,17 +145,23 @@ export function splitCell(
 
 /** px 空間の切断線（単位法線 normalPx・線上の点 pointPx）を塔のローカル空間へ写す */
 export function lineToLocal(normalPx: Vec2, pointPx: Vec2, frame: TowerFrame): { a: Vec2; b: number } {
-  // pLocal = S·(pPx - origin)、S = diag(1/widthPx, -1/heightPx)、origin = (leftPx + width/2, bottomPx)
-  // 直線 normalPx·pPx = bPx をローカルへ: (S·normalPx)·pLocal = bPx - normalPx·origin
+  // pLocal = M·(pPx - origin)、M = diag(1/widthPx, -1/heightPx)、origin = (leftPx + width/2, bottomPx)。
+  // 直線 normalPx·pPx = normalPx·pointPx に pPx = origin + M⁻¹·pLocal を代入すると
+  //   (M⁻¹·normalPx)·pLocal = normalPx·(pointPx - origin)
+  // M が対角なので M⁻¹·normalPx = (widthPx·nx, -heightPx·ny)
+  // （V-1 修正: 旧実装はここを widthPx / heightPx で「割って」いたため係数が 10⁻⁵ 倍に縮み、
+  //   全セルが直線の片側と判定されていた）。単位法線 a と右辺 b を同じ |w| で割って a·p = b の形へ正規化する。
   const originX = frame.leftPx + frame.widthPx * 0.5;
   const originY = frame.bottomPx;
-  const scaledX = normalPx.x / frame.widthPx;
-  const scaledY = -normalPx.y / frame.heightPx;
+  const scaledX = normalPx.x * frame.widthPx;
+  const scaledY = -normalPx.y * frame.heightPx;
   const length = Math.hypot(scaledX, scaledY) || 1;
   const a = { x: scaledX / length, y: scaledY / length };
-  const bPx = normalPx.x * pointPx.x + normalPx.y * pointPx.y;
-  const b = (bPx - (normalPx.x * originX + normalPx.y * originY)) / length;
-  return { a, b };
+  const b = ((normalPx.x * (pointPx.x - originX)) + normalPx.y * (pointPx.y - originY)) / length;
+  // 切断面の「上」の向きを固定する。px 空間で上向き（y 負方向）の法線は、ローカル（y 上向き正）でも上向き。
+  // 水平線（normalPx.y = 0）は a.y の符号へ従う。
+  const upSign = normalPx.y < 0 ? 1 : normalPx.y > 0 ? -1 : a.y >= 0 ? 1 : -1;
+  return { a: { x: a.x * upSign, y: a.y * upSign }, b: b * upSign };
 }
 
 /**
