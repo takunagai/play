@@ -274,7 +274,7 @@ window.__art = {
 |---|---:|---|
 | `INTRO_FAST_BUILD_MS` | 120 | 早く導入を抜けた時、塔を完成させる最大時間 |
 | `SWIPE_MIN_LENGTH_PX` | 56 | 切断候補とする最小軌跡長 |
-| `SWIPE_MIN_SPEED_PX_S` | 180 | 誤タップをスワイプから除く境界 |
+| `SWIPE_MIN_SPEED_PX_S` | 90 | 誤タップをスワイプから除く境界。verify の CDP タッチ実測が約 115px/s のため 180 から下げた |
 | `SWIPE_SHARP_SPEED_PX_S` | 1200 | `sharpness = 1` になる速度 |
 | `SWIPE_CROSS_MARGIN_PX` | 12 | 塔交差の前後に必要な軌跡長 |
 | `HITSTOP_MS` | 100 | 切断後に局所アニメーションを止める時間 |
