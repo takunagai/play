@@ -30,15 +30,15 @@ export function midiToFrequency(midi: number): number {
 
 /**
  * 崩壊段の MIDI。上段（rowIndex = 0）ほど高く、下段ほど低い。
- * D6 付近から D3 付近まで単調下降し、音階外へ出さない（正本 §6）。
- * previousMidi を渡すと、直前の段より高くならないよう単調非増加へ丸める。
+ * D6 付近から D3 付近まで下降し、音階外へ出さない（正本 §6）。
+ * 「直前の段より高くしない」単調非増加の保証は呼び出し側（synth-engine の切断ごとの音列状態）が行う。
+ * V-2: この関数は切断を跨ぐ状態を持たない。持ち越された前周の音で丸めると
+ * 2 周目以降が下端の一音に固定されるため。
  */
-export function collapseMidi(rowIndex: number, rowCount: number, previousMidi: number | null = null): number {
+export function collapseMidi(rowIndex: number, rowCount: number): number {
   const t = rowCount <= 1 ? 0 : Math.min(1, Math.max(0, rowIndex / (rowCount - 1)));
   const continuous = COLLAPSE_TOP_MIDI + (COLLAPSE_BOTTOM_MIDI - COLLAPSE_TOP_MIDI) * t;
-  const midi = snapToScale(continuous);
-  if (previousMidi !== null && midi > previousMidi) return previousMidi;
-  return midi;
+  return snapToScale(continuous);
 }
 
 /** 連続的な MIDI 値を D ドリアンのいずれかの音へスナップする（最も近い音階内の音） */

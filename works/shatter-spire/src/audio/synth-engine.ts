@@ -61,6 +61,11 @@ interface ActiveVoice {
   isProtected: boolean;
 }
 
+/** 切断ごとに崩壊音列の状態。beginCut で作り、scheduleGlassStep が進める（V-2: 前回切断の残留を持ち越さない） */
+interface GlassRunState {
+  previousMidi: number | null;
+}
+
 export class SynthAudioEngine implements AudioEngine {
   private context: AudioContext | null = null;
   private glassBus: GainNode | null = null;
@@ -75,6 +80,8 @@ export class SynthAudioEngine implements AudioEngine {
   private recentGlassStarts: number[] = [];
   private lastSandNoteAtMs = 0;
   private lastSandTickAtSeconds = -1;
+  /** 現在の切断の崩壊音列状態。beginCut ごとに作り直す（V-2: 2 周目以降も必ず上端から下降させる） */
+  private glassRun: GlassRunState | null = null;
   private regrowDrone: { gain: GainNode; lpf: BiquadFilterNode; oscillators: OscillatorNode[] } | null = null;
   private energy = 0;
 
@@ -167,6 +174,9 @@ export class SynthAudioEngine implements AudioEngine {
     const context = this.context;
     const nowMs = performance.now();
     const schedule = computeCutSchedule(event, nowMs);
+    // 崩壊音列の状態をこの切断の分だけ作り直す（V-2: 前回切断の lastGlassMidi を持ち越さない。
+    // 旧実装は前回の最終音（下端 D3）のままで 2 周目以降が一音に固定されていた）
+    this.glassRun = { previousMidi: null };
     if (!this.isWired || !context || !this.glassBus || !this.bodyBus) return schedule;
     // AudioContext が running のときだけ先行予約する。未解錠なら視覚だけ進む
     // （途中で解錠されても過去の時刻をまとめて鳴らさない。正本 §5）
@@ -435,10 +445,15 @@ export class SynthAudioEngine implements AudioEngine {
     const clampedRowCount = Number.isFinite(rowCount) ? Math.max(1, Math.floor(rowCount)) : 1;
     const clampedX = Number.isFinite(normalizedX) ? Math.min(1, Math.max(0, normalizedX)) : 0.5;
     const decay = GLASS_STEP_DECAY_MIN_SECONDS + (GLASS_STEP_DECAY_SECONDS - GLASS_STEP_DECAY_MIN_SECONDS) * (1 - clampedSharpness);
-    const previousMidi = this.lastGlassMidi;
-    const midi = collapseMidi(clampedRow, clampedRowCount, previousMidi);
-    this.lastGlassMidi = midi;
-    const frequency = midiToFrequency(midi);
+    // 崩壊音列は beginCut で作った切断ごとの状態で進める（V-2）。状態が無い（beginCut を経ずした発音）場合は
+    // ここで作り、前回切断の残留を参照しない
+    if (!this.glassRun) this.glassRun = { previousMidi: null };
+    const previousMidi = this.glassRun.previousMidi;
+    const midi = collapseMidi(clampedRow, clampedRowCount);
+    // 単調非増加: 連続写像は単調下降なので通常そのまま。前段より高くなるケース（ rowCount 変化等）は前段へ丸める
+    const clampedMidi = previousMidi !== null && midi > previousMidi ? previousMidi : midi;
+    this.glassRun.previousMidi = clampedMidi;
+    const frequency = midiToFrequency(clampedMidi);
     const peak = GLASS_STEP_GAIN * (0.85 + 0.3 * this.energy);
     this.registerGlassStart(atSeconds);
 
@@ -486,8 +501,6 @@ export class SynthAudioEngine implements AudioEngine {
     this.applyGlassBusDuck(atSeconds);
     this.scheduleCleanup(atSeconds + longestSeconds + 0.15, nodes, voice, source);
   }
-
-  private lastGlassMidi: number | null = null;
 
   private registerGlassStart(atSeconds: number): void {
     this.recentGlassStarts.push(atSeconds);
