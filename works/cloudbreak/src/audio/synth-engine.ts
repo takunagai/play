@@ -9,6 +9,7 @@
 
 import type { AudioEngine, BreakthroughEvent, FlightSample, LayerCrossEvent } from "./engine";
 import {
+  ANALYSER_FFT_SIZE,
   BELL_MAX_VOICES,
   BELL_STEAL_FADE_SECONDS,
   BREAKTHROUGH_FILTER_SECONDS,
@@ -102,6 +103,8 @@ export class SynthAudioEngine implements AudioEngine {
 
   private droneVoices = new Map<number, DroneVoice>();
   private bells = new Map<number, ActiveBell>();
+  /** start してまだ onended を迎えていない source 数。getDiagnostics とボイス予算の回帰確認で使う */
+  private activeSourceCount = 0;
   private nextBellId = 1;
   private chordTarget = 0;
   private smoothedAmp = 0;
@@ -120,6 +123,15 @@ export class SynthAudioEngine implements AudioEngine {
 
   get isReady(): boolean {
     return this.isWired;
+  }
+
+  /** 発音中の source を数え、onended で減らす。掃除は最後の 1 本に onEnded で託せる */
+  private trackSource(source: AudioScheduledSourceNode, onEnded?: () => void): void {
+    this.activeSourceCount += 1;
+    source.onended = () => {
+      this.activeSourceCount -= 1;
+      onEnded?.();
+    };
   }
 
   async start(): Promise<void> {
@@ -151,23 +163,30 @@ export class SynthAudioEngine implements AudioEngine {
     sharedFilter.Q.value = 0.7;
 
     const dry = context.createGain();
-    const wet = context.createGain();
-    const convolver = context.createConvolver();
     const compressor = context.createDynamicsCompressor();
     const master = context.createGain();
     const analyser = context.createAnalyser();
 
     dry.gain.value = 1 - REVERB_WET;
-    wet.gain.value = REVERB_WET;
-    convolver.buffer = this.buildImpulseResponse(context);
     compressor.threshold.value = COMP_THRESHOLD_DB;
     compressor.ratio.value = COMP_RATIO;
     master.gain.value = MASTER_GAIN;
-    analyser.fftSize = 1024;
+    analyser.fftSize = ANALYSER_FFT_SIZE;
 
+    // dry 経路を先に成立させる。wet（Convolver / 生成 IR）だけを任意にして、
+    // Convolver や IR の生成に失敗しても dry だけで音が出続けるようにする
     sharedFilter.connect(dry).connect(compressor);
-    sharedFilter.connect(convolver).connect(wet).connect(compressor);
     compressor.connect(master).connect(analyser).connect(context.destination);
+    try {
+      const wet = context.createGain();
+      const convolver = context.createConvolver();
+      wet.gain.value = REVERB_WET;
+      convolver.buffer = this.buildImpulseResponse(context);
+      sharedFilter.connect(convolver).connect(wet).connect(compressor);
+    } catch (error: unknown) {
+      // wet を諦めて dry だけの音で続行する。失敗は診断に残す
+      this.lastError = error instanceof Error ? error.message : String(error);
+    }
 
     const droneBus = context.createGain();
     droneBus.gain.value = 1;
@@ -193,6 +212,7 @@ export class SynthAudioEngine implements AudioEngine {
         const voiceGain = context.createGain();
         voiceGain.gain.value = CHORD_VOICE_GAIN * level;
         oscillator.connect(voiceGain).connect(chordGain);
+        this.trackSource(oscillator);
         oscillator.start();
       }
     }
@@ -212,6 +232,7 @@ export class SynthAudioEngine implements AudioEngine {
     windEnvelope.gain.value = WIND_BASE_GAIN;
     const windPan = context.createStereoPanner();
     windNoise.connect(windFilter).connect(windEnvelope).connect(windPan).connect(windBus);
+    this.trackSource(windNoise);
     windNoise.start();
 
     const windLfo = context.createOscillator();
@@ -220,6 +241,7 @@ export class SynthAudioEngine implements AudioEngine {
     const windLfoGain = context.createGain();
     windLfoGain.gain.value = 260;
     windLfo.connect(windLfoGain).connect(windFilter.frequency);
+    this.trackSource(windLfo);
     windLfo.start();
 
     const windPanLfo = context.createOscillator();
@@ -228,6 +250,7 @@ export class SynthAudioEngine implements AudioEngine {
     const windPanLfoGain = context.createGain();
     windPanLfoGain.gain.value = 0.3;
     windPanLfo.connect(windPanLfoGain).connect(windPan.pan);
+    this.trackSource(windPanLfo);
     windPanLfo.start();
 
     // 圧力音: C2 + G2 の弱い倍音。gain 0 で常駐し pressure で開く
@@ -241,6 +264,7 @@ export class SynthAudioEngine implements AudioEngine {
       const toneGain = context.createGain();
       toneGain.gain.value = index === 0 ? 1 : 0.35;
       oscillator.connect(toneGain).connect(pressureEnvelope);
+      this.trackSource(oscillator);
       oscillator.start();
     }
 
@@ -349,7 +373,14 @@ export class SynthAudioEngine implements AudioEngine {
       sharedFilter.frequency.linearRampToValueAtTime(targetHz, now + ramp);
     }
 
-    // 3. 風の帯域と定位。pressure で高域を減衰
+    // 3. 風。押下中は目標音量（velocity と押下で決まる）へ追従し、離した後の
+    //    床への復帰（450ms）は endLift が担うため、ここでは押下中だけ書き込む
+    const windEnvelope = this.windEnvelope;
+    if (windEnvelope && sample.isPressing) {
+      windEnvelope.gain.cancelScheduledValues(now);
+      windEnvelope.gain.setValueAtTime(Math.max(0.0001, windEnvelope.gain.value), now);
+      windEnvelope.gain.linearRampToValueAtTime(this.windTargetGain(sample), now + PARAM_RAMP_SECONDS);
+    }
     const windFilter = this.windFilter;
     const windPan = this.windPan;
     if (windFilter) {
@@ -410,17 +441,11 @@ export class SynthAudioEngine implements AudioEngine {
       voice.envelope.gain.cancelScheduledValues(now);
       voice.envelope.gain.setValueAtTime(Math.max(0.0001, voice.envelope.gain.value), now);
       voice.envelope.gain.linearRampToValueAtTime(0.0001, now + DRONE_VOICE_OUT_SECONDS);
-      const last = voice.oscillators[voice.oscillators.length - 1];
-      if (last) {
-        last.onended = () => {
-          for (const oscillator of voice.oscillators) oscillator.disconnect();
-          voice.envelope.disconnect();
-          this.droneVoices.delete(midi);
-        };
-        last.stop(now + DRONE_VOICE_OUT_SECONDS + 0.1);
-      } else {
-        this.droneVoices.delete(midi);
-      }
+      // voice 内の全 oscillator を同一停止時刻で止める。最後の 1 本だけ stop すると、
+      // 残りが停止時刻の無いまま走り続け、層を往復するたびに発音中ソースが積み上がる
+      const stopAt = now + DRONE_VOICE_OUT_SECONDS + 0.1;
+      for (const oscillator of voice.oscillators) oscillator.stop(stopAt);
+      if (voice.oscillators.length === 0) this.droneVoices.delete(midi);
     }
 
     if (this.droneVoices.size >= DRONE_MAX_VOICES) return;
@@ -437,6 +462,7 @@ export class SynthAudioEngine implements AudioEngine {
         oscillator.frequency.value = frequency;
         oscillator.detune.value = detune;
         oscillator.connect(envelope);
+        this.trackSource(oscillator);
         oscillator.start(now);
         oscillators.push(oscillator);
       }
@@ -446,8 +472,18 @@ export class SynthAudioEngine implements AudioEngine {
       const triangleGain = context.createGain();
       triangleGain.gain.value = DRONE_TRIANGLE_GAIN;
       triangle.connect(triangleGain).connect(envelope);
-      triangle.start(now);
       oscillators.push(triangle);
+      // 退避時の掃除（disconnect と台帳からの削除）は最後の 1 本の onended に託す。
+      // 前提: syncDroneVoices が voice 内の全 oscillator を同一停止時刻で stop させる
+      const last = oscillators[oscillators.length - 1];
+      if (last) {
+        this.trackSource(last, () => {
+          for (const oscillator of oscillators) oscillator.disconnect();
+          envelope.disconnect();
+          this.droneVoices.delete(midi);
+        });
+      }
+      triangle.start(now);
 
       envelope.gain.cancelScheduledValues(now);
       envelope.gain.setValueAtTime(0.0001, now);
@@ -537,30 +573,35 @@ export class SynthAudioEngine implements AudioEngine {
       envelope.gain.exponentialRampToValueAtTime(0.0001, endAt);
 
       const frequency = midiToFrequency(midi);
+      const bellId = this.nextBellId++;
       const oscillators: OscillatorNode[] = [];
-      for (const [ratio, level] of options.partials) {
+      const partials = options.partials;
+      for (const [index, [ratio, level]] of partials.entries()) {
         const oscillator = context.createOscillator();
         oscillator.type = "sine";
         oscillator.frequency.value = frequency * ratio;
         const partialGain = context.createGain();
         partialGain.gain.value = level;
         oscillator.connect(partialGain).connect(envelope);
+        const isLast = index === partials.length - 1;
+        // 掃除は最後の partial の onended に託す（全 partial は同じ時刻で stop 済み）
+        this.trackSource(
+          oscillator,
+          isLast
+            ? () => {
+                for (const finished of oscillators) finished.disconnect();
+                envelope.disconnect();
+                panner.disconnect();
+                this.bells.delete(bellId);
+              }
+            : undefined,
+        );
         oscillator.start(attackAt);
         oscillator.stop(endAt + 0.05);
         oscillators.push(oscillator);
       }
 
-      const bellId = this.nextBellId++;
       this.bells.set(bellId, { id: bellId, envelope, endsAt: endAt });
-      const last = oscillators[oscillators.length - 1];
-      if (last) {
-        last.onended = () => {
-          for (const oscillator of oscillators) oscillator.disconnect();
-          envelope.disconnect();
-          panner.disconnect();
-          this.bells.delete(bellId);
-        };
-      }
       startAt += options.staggerSeconds ?? 0;
     }
   }
@@ -599,6 +640,10 @@ export class SynthAudioEngine implements AudioEngine {
       isReady: this.isWired,
       droneVoices: this.droneVoices.size,
       bells: this.bells.size,
+      // 発音中の source 数。退いたドローン声の全 oscillator が止まっていることの確認に使う
+      activeSources: this.activeSourceCount,
+      // 風の現在音量。押下中の速度追随と release 450ms 後の床（WIND_BASE_GAIN）復帰の確認に使う
+      windGain: Math.round((this.windEnvelope?.gain.value ?? 0) * 1000) / 1000,
       chordOn: this.chordTarget === 1,
       filterHz: Math.round(this.lastFilterTargetHz),
       // 音響が最後に受け取った FlightSample.pressure。clear で 0 に落ちたことの確認に使う

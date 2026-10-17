@@ -145,13 +145,13 @@ function pressStart(nowMs: number): void {
   }
 }
 
-/** 押下終了。上昇中なら慣性の coasting へ。clear の 4 秒保持は updateFlight が扱う */
+/** 押下終了。上昇中なら慣性の coasting へ。突破後の離しでも state にかかわらず風を床へ戻す */
 function pressEnd(nowMs: number): void {
   flight.pressing = false;
   if (flight.state === "ascending") {
     enterState("coasting", nowMs);
-    audio.endLift(sampleOf());
   }
+  audio.endLift(sampleOf());
 }
 
 function updateFlight(dtSeconds: number, nowMs: number): void {
@@ -342,16 +342,16 @@ new P5((p: P5) => {
       { passive: true },
     );
 
-    // 戻った時に勝手に上昇し続けない
+    // 戻った時に勝手に上昇し続けない（押下の後始末は pressEnd と同じく state 非依存で行う）
     const forceRelease = (): void => {
       if (!spacePressed && !pointerActive) return;
       spacePressed = false;
       pointerActive = false;
       if (flight.state === "ascending") {
         enterState("coasting", performance.now());
-        audio.endLift(sampleOf());
       }
       flight.pressing = false;
+      audio.endLift(sampleOf());
     };
     window.addEventListener("blur", forceRelease, { passive: true });
     document.addEventListener("visibilitychange", () => {
