@@ -1,11 +1,12 @@
 /* ============================================================
    style.css ─ レイヤー構成と導入画面のグローバルスタイル
+   トーン: 白＋淡色ミニマル（雲影 #6E7B96 / 雲明部 #E8EEF7 / 晴天 #7EC8F8 / 朝光 #FFE3B8）
    ============================================================ */
 
 :root {
-  --palette-base: #07070d;
-  --palette-text: #f4f2ff;
-  color-scheme: dark;
+  --palette-base: #c9d5e8;
+  --palette-text: #2e3950;
+  color-scheme: light;
 }
 
 * {
@@ -63,7 +64,7 @@ body {
   gap: 12px;
   padding: 24px;
   text-align: center;
-  background: rgba(7, 7, 13, 0.35);
+  background: rgba(201, 213, 232, 0.42);
   transition: opacity 0.5s ease;
   cursor: pointer;
 }
@@ -78,12 +79,14 @@ body {
   font-size: clamp(2.25rem, 9vw, 4.5rem);
   font-weight: bold;
   line-height: 1.1;
+  color: var(--palette-text);
   animation: gate-rise 0.9s ease both;
 }
 
 #gate-text {
   margin: 0;
   font-size: clamp(1rem, 3.6vw, 1.25rem);
+  color: var(--palette-text);
   opacity: 0.85;
   animation: gate-rise 0.9s 0.3s ease both;
 }
@@ -100,8 +103,8 @@ body {
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
-  color: #c6ff00;
-  background: rgba(0, 0, 0, 0.55);
+  color: #f4f8ff;
+  background: rgba(46, 57, 80, 0.82);
   border-radius: 6px;
   pointer-events: none;
 }
