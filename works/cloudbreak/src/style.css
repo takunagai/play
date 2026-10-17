@@ -1,0 +1,132 @@
+/* ============================================================
+   style.css ─ レイヤー構成と導入画面のグローバルスタイル
+   トーン: 白＋淡色ミニマル（雲影 #6E7B96 / 雲明部 #E8EEF7 / 晴天 #7EC8F8 / 朝光 #FFE3B8）
+   ============================================================ */
+
+:root {
+  --palette-base: #c9d5e8;
+  --palette-text: #2e3950;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--palette-base);
+  /* スクロール・ピンチでページが動かないこと */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  color: var(--palette-text);
+}
+
+#stage,
+#gate {
+  -webkit-touch-callout: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+}
+
+#p5-host,
+#p5-host canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+#gate {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(201, 213, 232, 0.42);
+  transition: opacity 0.5s ease;
+  cursor: pointer;
+}
+
+#gate.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#gate-title {
+  margin: 0;
+  font-size: clamp(2.25rem, 9vw, 4.5rem);
+  font-weight: bold;
+  line-height: 1.1;
+  color: var(--palette-text);
+  animation: gate-rise 0.9s ease both;
+}
+
+#gate-text {
+  margin: 0;
+  font-size: clamp(1rem, 3.6vw, 1.25rem);
+  color: var(--palette-text);
+  opacity: 0.85;
+  animation: gate-rise 0.9s 0.3s ease both;
+}
+
+#debug-overlay {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  z-index: 20;
+  margin: 0;
+  padding: 8px 10px;
+  max-width: 70vw;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: #f4f8ff;
+  background: rgba(46, 57, 80, 0.82);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+#debug-overlay[hidden] {
+  display: none;
+}
+
+@keyframes gate-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #gate-title,
+  #gate-text {
+    animation: none;
+  }
+}
