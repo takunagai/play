@@ -98,6 +98,7 @@ const flight: Flight = {
 let pan = 0;
 let targetPan = 0;
 let pressLevel = 0;
+let pressureLevel = 0;
 let lastAmp = 0;
 let sink = 0;
 let lastError = "";
@@ -115,10 +116,15 @@ function sampleOf(): FlightSample {
     altitude: flight.altitude,
     velocity: flight.velocity,
     layer: layerOf(flight.altitude),
-    pressure: pressureOf(flight.altitude),
+    pressure: pressureLevel,
     pan,
     isPressing: flight.pressing,
   };
+}
+
+/** 最終層の圧迫 0..1。突破（armed 解除）したら 0 のまま。再武装は下降で BREAKTHROUGH_REARM_ALTITUDE 未満まで起きない */
+function pressureTargetOf(): number {
+  return flight.armed ? pressureOf(flight.altitude) : 0;
 }
 
 function enterState(next: State, nowMs: number): void {
@@ -233,7 +239,7 @@ function renderDebugOverlay(): void {
     altitude: Math.round(flight.altitude * 1000) / 1000,
     velocity: Math.round(flight.velocity * 1000) / 1000,
     layer: layerOf(flight.altitude),
-    pressure: Math.round(pressureOf(flight.altitude) * 100) / 100,
+    pressure: Math.round(pressureLevel * 100) / 100,
     isPressing: flight.pressing,
     armed: flight.armed,
     qualityLevel: quality.getLevel(),
@@ -368,6 +374,9 @@ new P5((p: P5) => {
     // 指の x 位置は風と和音の定位へだけ弱く反映する（フレームレート非依存の追従）
     pan += (targetPan - pan) * (1 - Math.pow(1 - POINTER_PAN_SMOOTHING, dtSeconds * 60));
 
+    // 圧迫の目標値へ pressLevel と同じ時定数で追従する。突破中に 0 へ滑らかに落ちる
+    pressureLevel += (pressureTargetOf() - pressureLevel) * (1 - Math.pow(0.002, dtSeconds));
+
     const sample = sampleOf();
     audio.updateFlight(sample);
     lastAmp = audio.getAmp(); // analyser の読み出しは 1 フレーム 1 回
@@ -384,7 +393,7 @@ new P5((p: P5) => {
       altitude: flight.altitude,
       pressLevel,
       clearMix,
-      pressure: pressureOf(flight.altitude),
+      pressure: pressureLevel,
       sink,
       amp: lastAmp,
       qualityLevel: quality.getLevel() as 0 | 1 | 2,

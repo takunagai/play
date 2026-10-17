@@ -31,3 +31,13 @@ AudioEngine 契約（engine.ts）を先に固め、その後に音響・視覚�
 ## Phase 3: 公開
 
 draft PR で設計と雛形を共有し、マージは人間の判断に委ねる。手元からデプロイしない。
+
+## Phase 4: 修正ラウンド 1（描画と圧迫）
+
+レビュー指摘 visual MF-1（長押し上昇中に画面上端へ不透明な極暗部）と code V-1（clear でも pressure=1 が残る）を Playwright の連続フレーム計測で切り分けた。
+
+- MF-1 の根本原因は offscreen（veil/morning）ではなく `clouds.ts` の `backgroundGradient()`。`mixColor()` の返り値（`rgb(r,g,b)` 文字列）を `mixColor()` に直接入れ子で渡しており、`parseHex()` が `#rrggbb` 前提のため `parseInt("gb(...)", 16)` が NaN になり、ビット演算で `[0,0,0]` に丸められていた。結果、gradient の上端（topColor）が常に不透明純黒 `rgb(0,0,0)` になり、画面上端から約 39% が黒く塗られていた（実測: 高度 0.8〜0.94 で画面の 27〜36%）。修正は混色を RGB 配列ベースの `mixRgb()` に統一し、`rgb()` 文字列を `parseHex` に渡し直さない構造にした。修正後は上昇中の暗部フレームが 0 件（375/1280 とも maxDark 0.00%）。
+- V-1 は `pressureOf()` が CLEAR_ALTITUDE 以上でも 1 を返すことが原因。armed（突破権）と結合した `pressureTargetOf()` を導入し、突破したら圧迫は `pressLevel` と同じ時定数で 0 へ滑らかに落ちて、下降で高度 0.78 未満に再武装するまで戻らないようにした。描画の圧迫ベールと音響（pressureTone・風の high-cut）はどちらも `FlightSample.pressure` 一本で駆動されるため、`sampleOf()` が平滑化後の値を渡す形で両方が同時に解除される。修正後の clear 実測: pressure 0、共有 LPF 4800Hz（晴天の開放値）。
+- 上記に伴い visual N-1（clear 空色がお題から逸脱）も解消した。clear の空（画面上 5〜40% 帯）の平均色は 1280px で rgb(137,200,240)、375px で rgb(158,205,229)（お題 #7EC8F8 との色距離 14 / 38）。
+- code N-2（resize 寸法別 backgroundCache の残留）は `resizeBuffers()` で `backgroundCache.clear()` を呼んで旧寸法分を破棄した。
+- 再発防止テストを `tests/vitals.mjs` に置いた。`pnpm build` の後に `node works/cloudbreak/tests/vitals.mjs` で実行し、375/1280 の長押し上昇を駆動して (1) 上昇中の暗部率 1% 未満、(2) clear で pressure 0.02 未満かつ LPF が開放値、(3) clear 空色がお題に近い（距離 45 未満）を確認する。

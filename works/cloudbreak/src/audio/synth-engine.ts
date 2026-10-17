@@ -601,6 +601,8 @@ export class SynthAudioEngine implements AudioEngine {
       bells: this.bells.size,
       chordOn: this.chordTarget === 1,
       filterHz: Math.round(this.lastFilterTargetHz),
+      // 音響が最後に受け取った FlightSample.pressure。clear で 0 に落ちたことの確認に使う
+      pressure: Math.round(this.lastSample.pressure * 100) / 100,
       lastAudioError: this.lastError,
     };
   }
