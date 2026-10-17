@@ -14,6 +14,11 @@
 //      （以前は声ごとに stop 済み 1 本だけが止まり、残り 2 本が停止時刻の無いまま積み上がった）
 //   6. dry-fallback (MF-1): createConvolver() の故障注入でも配線は生き（isReady=true）、
 //      短い press で amp > 0。dry 経路が先に成立し、wet だけが任意であることの確認
+//   7. pointer-capture (MF-2): pointerdown の concrete Element に primary pointer の capture が掛かり、
+//      viewport 外 release でも pressing 解除と音響 release が成立する。lostpointercapture の
+//      明示解放経路（up / cancel が届かない状況の代替）でも解放されること
+//      （以前は capture 無しで viewport 外 release の行き先が UA 実装次第、lostpointercapture は
+//      バブリングしないため window の bubble リスナーでは永遠に受け取れない死んだ経路だった）
 // 使うのは window.__art と ?debug のオーバーレイ表示のみ。exit 0 で合格。
 import { chromium } from "playwright";
 import { existsSync } from "node:fs";
@@ -316,6 +321,121 @@ async function runDryFallback(serverUrl) {
   }
 }
 
+// MF-2: pointerdown の concrete Element への capture と、viewport 外 release・lostpointercapture での解放
+async function runPointerCapture(serverUrl) {
+  const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${serverUrl}/works/cloudbreak/?debug`, { waitUntil: "load" });
+    await page.waitForFunction(() => window.__art && typeof window.__art.getAmp === "function", null, { timeout: 8000 });
+    await sleep(SETTLE_MS);
+    const center = { x: 640, y: 400 };
+    // 導入画面を抜けておく（計測は gameplay 状態で行う）
+    await syntheticPointer(page, "pointerdown", center.x, center.y);
+    await sleep(120);
+    await syntheticPointer(page, "pointerup", center.x, center.y);
+    await sleep(600);
+
+    // pointerdown の concrete target と lostpointercapture を記録する。
+    // lostpointercapture はバブリングしないため capture フェーズで受ける
+    await page.evaluate(() => {
+      window.__cap = { downTarget: null, lostCount: 0 };
+      window.addEventListener(
+        "pointerdown",
+        (event) => {
+          if (event.isPrimary) window.__cap.downTarget = event.target instanceof Element ? event.target : null;
+        },
+        { passive: true, capture: true },
+      );
+      window.addEventListener(
+        "lostpointercapture",
+        () => {
+          window.__cap.lostCount += 1;
+        },
+        { passive: true, capture: true },
+      );
+    });
+
+    // 1) pointerdown で concrete Element に primary pointer が capture されていること
+    await page.mouse.move(center.x, center.y);
+    await sleep(60);
+    await page.mouse.down();
+    await sleep(150);
+    const captured = await page.evaluate(() => {
+      const el = window.__cap.downTarget;
+      if (!el) return { hasCapture: false, tag: null };
+      return { hasCapture: el.hasPointerCapture(1), tag: `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}` };
+    });
+
+    // 2) viewport 外 release でも pressing 解除・音響 release が成立すること
+    await page.mouse.move(center.x, -100, { steps: 4 });
+    await sleep(60);
+    await page.mouse.up();
+    await sleep(800); // release ramp（450ms）+ オーバーレイ更新（6 フレームごと）の遅れを吸収
+    const snapOut = await readOverlay(page);
+
+    // 3) lostpointercapture 経路でも解放されること（up / cancel が届かない状況の代替経路）
+    await page.waitForFunction(() => {
+      const text = document.querySelector("#debug-overlay")?.textContent ?? "";
+      return /state: (descending|drifting)/.test(text) && /armed: true/.test(text);
+    }, null, { timeout: 30000 });
+    const lostBaseline = await page.evaluate(() => window.__cap.lostCount);
+    await page.mouse.move(center.x, center.y);
+    await sleep(60);
+    await page.mouse.down();
+    await sleep(150);
+    const snapDown2 = await readOverlay(page);
+    // capture 先要素への明示 release → lostpointercapture が発火して pressing 解除・endLift が通ること
+    await page.evaluate(() => {
+      const el = window.__cap.downTarget;
+      if (el) {
+        try {
+          el.releasePointerCapture(1);
+        } catch {
+          // 既に解放済みなら何もしない
+        }
+      }
+    });
+    await sleep(900); // release ramp とオーバーレイ更新を待つ
+    const snapLost = await readOverlay(page);
+    const lostCount = await page.evaluate(() => window.__cap.lostCount);
+    await context.close();
+
+    const windAfterLimit = WIND_RELEASE_MAX;
+    const captureSet = {
+      pass: captured.hasCapture,
+      target: captured.tag,
+      hasPointerCapture: captured.hasCapture,
+    };
+    const outState = snapOut.state ?? "";
+    const outGain = Number.isFinite(parseFloat(snapOut.windGain)) ? parseFloat(snapOut.windGain) : null;
+    const outRelease = {
+      pass: snapOut.isPressing === "false" && outState !== "ascending" && outState !== "" && outGain !== null && outGain <= windAfterLimit,
+      isPressing: snapOut.isPressing ?? null,
+      state: outState,
+      windGain: outGain,
+      windGainLimit: windAfterLimit,
+    };
+    const lostGain = Number.isFinite(parseFloat(snapLost.windGain)) ? parseFloat(snapLost.windGain) : null;
+    const lostRelease = {
+      pass:
+        snapDown2.isPressing === "true" &&
+        snapLost.isPressing === "false" &&
+        lostCount > lostBaseline &&
+        lostGain !== null &&
+        lostGain <= windAfterLimit,
+      pressingBefore: snapDown2.isPressing ?? null,
+      pressingAfter: snapLost.isPressing ?? null,
+      lostFired: lostCount - lostBaseline,
+      windGain: lostGain,
+    };
+    return { captureSet, outRelease, lostRelease };
+  } finally {
+    await browser.close();
+  }
+}
+
 async function main() {
   const distIndex = join(REPO_ROOT, "dist", "works", "cloudbreak", "index.html");
   if (!existsSync(distIndex)) {
@@ -325,16 +445,22 @@ async function main() {
   const server = await startStaticServer(join(REPO_ROOT, "dist"));
   const results = [];
   let dryFallback = null;
+  let pointerCapture = null;
   try {
     for (const viewport of VIEWPORTS) results.push(await runViewport(server.url, viewport));
     dryFallback = await runDryFallback(server.url);
+    pointerCapture = await runPointerCapture(server.url);
   } finally {
     await server.close();
   }
   const pass =
     results.every((r) => r.darkBand.pass && r.clearPressure.pass && r.clearSky.pass && r.windFollow.pass && r.windRelease.pass && r.voiceBudget.pass) &&
     dryFallback !== null &&
-    dryFallback.pass;
+    dryFallback.pass &&
+    pointerCapture !== null &&
+    pointerCapture.captureSet.pass &&
+    pointerCapture.outRelease.pass &&
+    pointerCapture.lostRelease.pass;
   for (const r of results) {
     console.log(
       `${r.viewport}px: dark ${r.darkBand.pass ? "pass" : "FAIL"} (max ${(r.darkBand.maxDarkRatio * 100).toFixed(2)}%)` +
@@ -347,6 +473,12 @@ async function main() {
   }
   console.log(
     `dry-fallback: ${dryFallback?.pass ? "pass" : "FAIL"} (isReady ${dryFallback?.isReady}, lastAudioError "${dryFallback?.lastAudioError}", maxAmp ${dryFallback?.maxAmp})`,
+  );
+  console.log(
+    `pointer-capture: ${pointerCapture?.captureSet.pass && pointerCapture?.outRelease.pass && pointerCapture?.lostRelease.pass ? "pass" : "FAIL"}` +
+      ` (set ${pointerCapture?.captureSet.pass ? "pass" : "FAIL"} on ${pointerCapture?.captureSet.target}` +
+      ` / outRelease ${pointerCapture?.outRelease.pass ? "pass" : "FAIL"} (pressing ${pointerCapture?.outRelease.isPressing}, state ${pointerCapture?.outRelease.state}, windGain ${pointerCapture?.outRelease.windGain})` +
+      ` / lostRelease ${pointerCapture?.lostRelease.pass ? "pass" : "FAIL"} (pressing ${pointerCapture?.lostRelease.pressingBefore}→${pointerCapture?.lostRelease.pressingAfter}, lostFired ${pointerCapture?.lostRelease.lostFired}, windGain ${pointerCapture?.lostRelease.windGain}))`,
   );
   console.log(`vitals: ${pass ? "pass" : "FAIL"}`);
   process.exit(pass ? 0 : 1);

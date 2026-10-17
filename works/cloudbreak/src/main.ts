@@ -104,6 +104,9 @@ let sink = 0;
 let lastError = "";
 let pointerActive = false;
 let spacePressed = false;
+// primary pointer の capture 先。viewport 外 release でも up / cancel を同じ要素で受け止める（MF-2）
+let captureEl: Element | null = null;
+let capturedPointerId: number | null = null;
 
 installArtHook({
   getAmp: () => lastAmp,
@@ -272,12 +275,39 @@ new P5((p: P5) => {
     );
     window.addEventListener("contextmenu", (event) => event.preventDefault());
 
+    /** capture 中の primary pointer を安全に解放する。pointerup の後は UA が暗黙解放済みで
+     *  NotFoundError になることがあるが、どちらでも結果は同じなので握りつぶす */
+    const releasePointerCaptureSafely = (): void => {
+      const element = captureEl;
+      const captured = capturedPointerId;
+      captureEl = null;
+      capturedPointerId = null;
+      if (element === null || captured === null) return;
+      try {
+        element.releasePointerCapture(captured);
+      } catch {
+        // 既に解放済み
+      }
+    };
+
     window.addEventListener(
       "pointerdown",
       (event: PointerEvent) => {
         if (!event.isPrimary) return;
         pointerActive = true;
         targetPan = (event.clientX / window.innerWidth) * 2 - 1;
+        // concrete Element に capture して viewport 外 release でも up / cancel を受け止める（MF-2）。
+        // capture に失敗した場合は従来どおり window への bubble に任せる
+        if (event.target instanceof Element) {
+          try {
+            event.target.setPointerCapture(event.pointerId);
+            captureEl = event.target;
+            capturedPointerId = event.pointerId;
+          } catch {
+            captureEl = null;
+            capturedPointerId = null;
+          }
+        }
         if (flight.state === "intro") {
           // resume() の解決を待たずに配線まで済ませる。成否に関わらず描画は続ける
           audio.start().catch((error: unknown) => {
@@ -302,6 +332,7 @@ new P5((p: P5) => {
     const release = (event: PointerEvent): void => {
       if (!event.isPrimary || !pointerActive) return;
       pointerActive = false;
+      releasePointerCaptureSafely();
       if (flight.state === "intro") {
         // 中央の pointerup で導入を抜ける（このタップ自体は上昇量へ数えない）
         gateEl.classList.add("is-hidden");
@@ -312,7 +343,9 @@ new P5((p: P5) => {
     };
     window.addEventListener("pointerup", release, { passive: true });
     window.addEventListener("pointercancel", release, { passive: true });
-    window.addEventListener("lostpointercapture", release, { passive: true });
+    // lostpointercapture はバブリングしないため capture フェーズで受ける。
+    // up / cancel が届かない状況（明示解放・要素消失等）でも release が通る解放保険（MF-2）
+    window.addEventListener("lostpointercapture", release, { passive: true, capture: true });
 
     window.addEventListener(
       "keydown",
@@ -347,6 +380,7 @@ new P5((p: P5) => {
       if (!spacePressed && !pointerActive) return;
       spacePressed = false;
       pointerActive = false;
+      releasePointerCaptureSafely();
       if (flight.state === "ascending") {
         enterState("coasting", performance.now());
       }
