@@ -100,11 +100,19 @@ function parseHex(hex: string): [number, number, number] {
   return rgb;
 }
 
-function mixColor(from: string, to: string, t: number): string {
-  const a = parseHex(from);
-  const b = parseHex(to);
+/** RGB 配列を t（0..1 に clamp）で混ぜる。混色は必ずこの配列ベースで行う */
+function mixRgb(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
   const k = clamp(t, 0, 1);
-  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * k)},${Math.round(a[1] + (b[1] - a[1]) * k)},${Math.round(a[2] + (b[2] - a[2]) * k)})`;
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+}
+
+function rgbString([r, g, b]: [number, number, number]): string {
+  return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+}
+
+/** hex（#rrggbb）同士を混ぜる。返り値は rgb() 文字列なので mixColor / parseHex に渡し直さない */
+function mixColor(from: string, to: string, t: number): string {
+  return rgbString(mixRgb(parseHex(from), parseHex(to), t));
 }
 
 /** 形状の色（body と明部）。高度と depth を量子化して表引きする */
@@ -268,6 +276,8 @@ export class CloudField {
     this.bufferedWidth = width;
     this.bufferedHeight = height;
     this.bufferedScale = backdropScale;
+    // gradient は寸法ごとに key が変わるため、寸法変更時に旧寸法分を破棄する
+    this.backgroundCache.clear();
     const w = Math.max(2, Math.floor(width / backdropScale));
     const h = Math.max(2, Math.floor(height / backdropScale));
 
@@ -378,7 +388,14 @@ export class CloudField {
     const key = `${width}x${height}_${Math.round(altNorm * 20)}_${Math.round(clearMix * 16)}`;
     const cached = this.backgroundCache.get(key);
     if (cached) return cached;
-    const topColor = mixColor(mixColor(PALETTE_SKY_LOW, PALETTE_SKY_HIGH, 0.35 + 0.65 * altNorm), PALETTE_CLEAR_SKY, clearMix);
+    // 混色の入れ子は rgb() 文字列を parseHex に渡して黒 (0,0,0) に崩れるため、必ず RGB 配列で合成する
+    const topColor = rgbString(
+      mixRgb(
+        mixRgb(parseHex(PALETTE_SKY_LOW), parseHex(PALETTE_SKY_HIGH), 0.35 + 0.65 * altNorm),
+        parseHex(PALETTE_CLEAR_SKY),
+        clearMix,
+      ),
+    );
     const bottomColor = mixColor(PALETTE_SKY_LOW, PALETTE_CLEAR_SKY, clearMix * 0.85);
     const grad = ctx.createLinearGradient(0, 0, 0, height);
     grad.addColorStop(0, topColor);
