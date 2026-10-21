@@ -106,10 +106,11 @@ window.__art = {
 
 - 対象は `git rev-parse --show-toplevel` の実パス（realpath）が ROOT と一致する作業場。index と HEAD の `works/` 配下を 1 回ずつ一括取得し、列挙候補 = 実ディレクトリ ∪ index 上の slug
 - `work.json` が無くて index / HEAD に追跡証拠があれば欠落エラー。staged / unstaged の削除のどちらも、生成物だけ残っていてもエラー
-- 全削除 unstaged（index に残留・実 dir 不在）は index 候補として欠落エラー。全削除 staged（`git rm -r` 済み）で実 dir も無い場合は意図的削除として列挙しない。削除を commit した後の不在（HEAD にしか証拠が無い slug）も列挙しない
-- staged 全削除でも実 dir が残っている間は HEAD 証拠で欠落エラー。削除 commit 後は証拠が消えるので、残った空 dir・生成物 dir は除外できる
+- 全削除 unstaged（index に残留・実 dir 不在）は index 候補として欠落エラー。全削除 staged（`git rm -r` 済み・削除はまだ commit していない）で実 dir も無い間は、HEAD に証拠が残っていても意図的削除として列挙しない
+- 削除を commit した後は index にも HEAD にも証拠が残らないので、その slug は列挙候補から外れる。残った空 dir・生成物 dir は除外できる
+- staged 全削除でも実 dir が残っている間は HEAD 証拠で欠落エラー
 - 証拠が無い残存 dir は直下だけ見る。空、または通常 dir の `node_modules` / `dist` のみなら生成物として除外する（内部は走査しない。gitignore を根拠にしない）。`src/`・`package.json`・未知・隠しファイルが混ざる、または同名のファイル / symlink がある場合は欠落エラー
-- symlink: 作品 dir の symlink は列挙外（index / HEAD に追跡証拠があるなら黙殺せずエラー）。`work.json` への symlink は読む。dangling は欠落エラー、読取不能・`work.json` が dir・走査エラーは隠さない
+- symlink: 列挙候補は実ディレクトリ ∪ index なので、HEAD にだけ証拠が残る slug の作品 dir symlink は候補にならず列挙外のまま。index 候補（index に slug 配下の追跡証拠がある）で実体が symlink のときは黙殺せずエラーにする。`work.json` への symlink は読む。dangling は欠落エラー、読取不能・`work.json` が dir・走査エラーは隠さない
 
 ### 非 Git と Git 障害
 
@@ -118,10 +119,11 @@ window.__art = {
 
 ## 人間が作品制作を安全に再開する手順
 
-作業途中で止めた作品と基盤スクリプトの修正を、人間だけが再開するための手順。以下の現状は 2026-10-21 時点の実測なので、使う前に読み直す。
+作業途中で止めた作品と基盤スクリプトの修正を、人間だけが再開するための手順。以下の現状は 2026-10-22 00:33 JST の実測なので、使う前に読み直す。
 
-- 基盤修正: commit `d6d3fa3`（branch `fix/work-discovery-residue`、base `9bc0540` から 1 commit）が repo 外 worktree `/home/hermes/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
-- 主 repo `/home/hermes/work/code/play`: branch `feat/work-abyss-winder`、HEAD = base `9bc0540`、remote に同 branch なし。`works/cloudbreak/` に untracked の生成物残存（`dist/` と `node_modules/` のみ。cloudbreak 本体は `feat/work-cloudbreak`、PR #8 は ready だが未 merge）
+- 基盤修正: branch `fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`: d6d3fa3 残存物除外の実装 / d6909c8 文書 / f3fdd19 受入テスト / 3ba5ec0b 初回レビュー指摘の是正）が repo 外 worktree `/home/hermes/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
+- 主 repo `/home/hermes/work/code/play`（2026-10-22 00:33 JST の read-only 再測定）: branch `feat/work-abyss-winder`、HEAD = base `9bc0540`、status 空、remote に同 branch なし（remote の branch は main・feat/work-cloudbreak・ci/check-workflow のみ）。worktree 登録は主 repo・基盤成果 dir・review dir の 3 件で、`.worktrees/` は空の容器。`works/cloudbreak/` には生成物だけの残存（`dist/` と `node_modules/`、約 142MB。cloudbreak 本体は `feat/work-cloudbreak`、PR #8 は ready だが未 merge）
+- 主 repo の観測は時点で区別して記録する: 構想カード t_11da0136 の着手時（2026-10-20）は status が `?? .worktrees/` の dirty、初回レビュー時（2026-10-22 00:05 JST 前後）は status 空・`.worktrees/` は空容器だった。誰がいつ以前のネスト checkout を整理したかは未確認で、当時 dirty だった事実は現在の空 status で消えたわけではない。これ以後の read-only 測定も同じように時点を付ける
 
 ### 1. 現状の再確認
 
@@ -136,43 +138,102 @@ git -C /home/hermes/work/code/play worktree list
 
 実測と違う・未知の変更があったら中止する。
 
-### 2. 基盤修正を本番に反映する（推奨: repo 外 worktree 継続案）
+abyss-winder 系カードの全体表（2026-10-22 00:33 JST に kanban から再帰取得。再開前には必ず再取得する。元カードと既存子の本文・状態・workspace はこの文書からも変更しない）:
 
-- 基盤 commit（`d6d3fa3`）を現作品 PR に混ぜない。push と新規 PR の承認を取ってから `fix/work-discovery-residue` を独立した基盤 PR として出し、人間が merge する
-- merge 後、承認済み base を作品 branch へ反映し、実際の再開 HEAD に修正が含まれることを `git log` で確認する。ローカルで通っただけでは止めたままのタスクは直らない
-- 承認前は push / 新規 PR をしない
-- 再開作業場は repo 外 worktree（例: `/home/hermes/work/play-worktrees/abyss-winder`）を推奨する。後続タスクの workspace / SHA / 成果受渡しを人間が統合する計画を先に作る
-- 主 repo は `feat/work-abyss-winder` を checkout 済みなので、`git checkout --force` で同じ branch を同時 checkout しない
+| カード | 役割 | 担当 | status | workspace | 依存する親 |
+|---|---|---|---|---|---|
+| t_11da0136 | 構想（元カード） | coder | blocked | dir /home/hermes/work/code/play | t_b5bd5fa7（完了済み） |
+| t_e1a3dbb9 | デザイン | web-designer | todo | dir /home/hermes/work/code/play | t_11da0136 |
+| t_085031c7 | 素材 | image-designer | todo | dir /home/hermes/work/code/play | t_11da0136 |
+| t_8ddf2fec | 実装 1（円周操作・描写） | coder | todo | dir /home/hermes/work/code/play | t_e1a3dbb9・t_085031c7 |
+| t_91bc3972 | 実装 2（音響同期・仕上げ） | coder | todo | dir /home/hermes/work/code/play | t_8ddf2fec |
+| t_42c428aa | 検証 | tester | todo | worktree /home/hermes/work/code/play | t_91bc3972 |
+| t_deaf60e5 | 見た目 | web-designer | todo | worktree /home/hermes/work/code/play | t_42c428aa |
+| t_03b1f641 | レビュー | reviewer | todo | worktree /home/hermes/work/code/play | t_11da0136・t_8ddf2fec・t_91bc3972・t_42c428aa |
+| t_3ac0dc1b | 統合 | eng-lead | todo | dir /home/hermes/work/code/play | 上記 8 枚すべて |
 
-### 3. cloudbreak 残存の退避（任意。未実行の手順）
+- 元カード t_11da0136 の再開は人間だけが行う（取得時点では blocked。着手前の pnpm check 失敗で停止しており、モデル指定は gpt-6.1-sol / openai-codex）
+- 実行順序は表の親列のとおり（t_e1a3dbb9 と t_085031c7 は並行可）。統合 t_3ac0dc1b は blocked の元カードを含む 8 枚すべての完了が親条件
+- unblock / reclaim / 再割当も行わない。全後継は並行 worker の停止合意（同期・dev・install・build 等）が取れるまで動かさない
 
-必要になったときだけ人間が手で実行する。退避先は repo 外（`/home/hermes/work/play-residue-backups`）に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先にする。
+### 2. 基盤修正を本番に反映する（推奨: 共有 dir 継続案）
+
+- push と新規 PR の承認を人間から取ってから、`fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`）を独立した基盤 PR として出し、人間が merge する。基盤 commit を現作品 PR に混ぜない。承認前は push / 新規 PR をしない
+- 共有 dir 継続（推奨）の経路: 独立基盤 PR の push・新規 PR 承認 → 人間 merge → 承認済み base を作品 branch へ反映 → 全後継タスクの共有 dir 固定・HEAD 整合 → 実作業場で品質ゲート → 別途「元タスク再開の承認」を取り、人間だけが再開する
+- この経路はこの文書の観測時点（2026-10-22 00:33 JST）では未実行。基盤のローカル成功（テスト・check・build が緑）だけでは、止めたままの元カードが直ったことにならない
+- merge 後、承認済み base を作品 branch へ反映し、実際の再開 HEAD に修正が含まれることを `git log` で確認する
+- 代替（repo 外作品 worktree 案）: 例として `/home/hermes/work/play-worktrees/abyss-winder` を新しく掘る。この場合は全後継タスクの workspace / SHA / 成果受渡しを人間が先に統合する計画が必要で、元カードだけは変更しない。主 repo は `feat/work-abyss-winder` を checkout 済みなので、同じ branch を同時 checkout する `git checkout --force` は禁止
+
+### 3. cloudbreak 残存の退避（任意。この文書の観測時点では未実行）
+
+必要になったときだけ人間が手で実行する。退避先は repo 外の親 `/home/hermes/work/play-residue-backups` に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先（`$DEST`）にする。一意先には台帳 `ledger.txt` を残す（元と先の realpath・型・所有者・記録時点・直下一覧・hash・symlink・各確認結果・保存先）。移動後・復元後の実在確認はコマンドで実測し、台帳の内容と照合してから台帳に結果を追記する。
 
 ```bash
 set -euo pipefail
-mkdir -p /home/hermes/work/play-residue-backups
-DEST=$(mktemp -d /home/hermes/work/play-residue-backups/t_11da0136-cloudbreak.XXXXXXXX)
-# 事前台帳: realpath・型・所有者・空き容量・FS・権限・ファイル一覧・hash・symlink。
-# hash は生成物（node_modules・dist）を除いた中身に絞る（巨大になるため）
-realpath /home/hermes/work/code/play/works/cloudbreak
-ls -la /home/hermes/work/code/play/works/cloudbreak
-du -sh /home/hermes/work/code/play/works/cloudbreak
-df -T /home/hermes/work/code/play/works /home/hermes/work/play-residue-backups
-find /home/hermes/work/code/play/works/cloudbreak ! -path '*/node_modules/*' ! -path '*/dist/*' -type f -exec sha256sum {} +
-mv -n /home/hermes/work/code/play/works/cloudbreak "$DEST/cloudbreak"
-# 事後照合: 元の不在は -e と -L の両方で確認（dangling symlink 残留を防ぐ）
-test ! -e /home/hermes/work/code/play/works/cloudbreak && test ! -L /home/hermes/work/code/play/works/cloudbreak
+SRC=/home/hermes/work/code/play/works/cloudbreak
+PARENT=/home/hermes/work/play-residue-backups
+mkdir -p "$PARENT"
+
+# 事前確認（1 つでも失敗・不明ならそこで中止。観測時点の残存は dist/ と node_modules/ の約 142MB）
+stat -c '%F %U:%G %a %n' "$SRC"   # directory の実在・型・所有者・権限
+realpath "$SRC"
+du -sh "$SRC"
+df -T "$PARENT" /home/hermes/work/code/play/works   # 両辺の FS・空き容量・権限
+
+# 一意退避先と台帳
+DEST=$(mktemp -d "$PARENT/t_11da0136-cloudbreak.XXXXXXXX")
+LEDGER="$DEST/ledger.txt"
+{
+  echo "ledger: t_11da0136-cloudbreak"
+  echo "記録時点: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "元: $SRC realpath=$(realpath "$SRC")"
+  echo "先: $DEST/cloudbreak"
+  echo "元の型・所有者・権限: $(stat -c '%F %U:%G %a' "$SRC")"
+  echo "## listing"
+} > "$LEDGER"
+(cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) >> "$LEDGER"
+echo "## hashes" >> "$LEDGER"   # hash は生成物（node_modules・dist）を除いた中身に絞る（巨大になるため）
+(cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) >> "$LEDGER"
+echo "## symlinks" >> "$LEDGER"
+(cd "$SRC" && find . -type l | sort) >> "$LEDGER"
+
+# 移動（-n は既存先を上書きしない。exit code だけでは成功と判定しない）
+mv -n "$SRC" "$DEST/cloudbreak"
+
+# 移動後の確認。どれか 1 つでも失敗したらそこで中止する（上書き・一括削除はしない）
+test -d "$DEST/cloudbreak" && test "$(stat -c '%F' "$DEST/cloudbreak")" = directory
+diff <(cd "$DEST/cloudbreak" && find . -mindepth 1 -maxdepth 1 | sort) \
+     <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+diff <(cd "$DEST/cloudbreak" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
+     <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+test ! -e "$SRC" && test ! -L "$SRC"
+echo "移動後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 
-- 成功の根拠を `mv -n` の exit code だけにしない。台帳の事前事後照合と元の不在確認まで含める
-- 失敗・競合が起きたらそこで中止する。上書き・一括削除はしない
+- 成功の根拠を `mv -n` の exit code だけにしない。宛先の実在・型、台帳の listing と hash の照合、元の不在（`-e` と `-L` の両方。dangling symlink 残留を防ぐ）まで全部確認してから台帳に OK を書く
+- `set -euo pipefail` により、確認のどれかが失敗したらその時点で異常終了する。競合・不足・不明は中止で、リトライ判断も含めて人間がする。上書き・一括削除はしない
+- `$DEST` は一意先ごとに値が変わる一時変数なので、復元時は退避先一意先の `ledger.txt` の「先:」行を読んで `$DEST` / `$LEDGER` を確定する（保存先の記録は台帳が正本）
 - 復元は、元の場所の不在を同じ 2 つの test で確認してから:
 
 ```bash
-test ! -e /home/hermes/work/code/play/works/cloudbreak && test ! -L /home/hermes/work/code/play/works/cloudbreak
-mv -n "$DEST/cloudbreak" /home/hermes/work/code/play/works/cloudbreak
+set -euo pipefail
+SRC=/home/hermes/work/code/play/works/cloudbreak
+LEDGER=/home/hermes/work/play-residue-backups/t_11da0136-cloudbreak.XXXXXXXX/ledger.txt   # 実在の一意先を指定
+DEST=$(dirname "$LEDGER")
+test ! -e "$SRC" && test ! -L "$SRC"
+mv -n "$DEST/cloudbreak" "$SRC"
+
+# 復元後の確認: 元の実在・型・台帳照合と、退避先の不在（-e と -L の双方）
+test -d "$SRC" && test "$(stat -c '%F' "$SRC")" = directory
+diff <(cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) \
+     <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+diff <(cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
+     <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+test ! -e "$DEST/cloudbreak" && test ! -L "$DEST/cloudbreak"
+echo "復元後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 
+- 復元後も `set -euo pipefail` で、確認のどれかが失敗したらそこで中止する。上書き・一括削除はしない
 - 退避先では node_modules の symlink が壊れるため、退避先で install / build 等の実行環境を掘らない
 
 ### 4. 再開前の検証ゲート
@@ -185,7 +246,7 @@ pnpm --version    # 11.21.0
 git rev-parse HEAD                  # 意図した HEAD か（基盤修正を含むか）
 git status --short                  # 空
 pnpm install --frozen-lockfile
-node --test scripts/tests/work-json.test.mjs                                # 列挙回帰 29 件
+node --test scripts/tests/work-json.test.mjs                                # 列挙回帰（観測時点の HEAD では 55 件。HEAD が進むと件数は増え得るので、fail 0 を確認する）
 node --experimental-strip-types --test works/shatter-spire/tests/*.test.ts  # 既存 9 件
 pnpm check
 pnpm -r --filter './works/*' exec tsc --noEmit
