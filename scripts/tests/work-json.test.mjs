@@ -4,11 +4,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { lstatSync, statSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadWorks } from "../lib/work-json.mjs";
+import { loadWorks, ROOT_DIR } from "../lib/work-json.mjs";
 
 const tmpRoots = [];
 test.after(async () => {
@@ -845,4 +845,47 @@ test("既定引数では ROOT_DIR の works を読む（worktree の 4 作品、
     ["heartburst", "light-domino", "prism-pop", "shatter-spire"],
   );
   assert.ok(works.every((work) => work.errors.length === 0), JSON.stringify(works));
+});
+
+test("非 Git rootDir では空 dir も欠落エラー（保守的 fallback、生成物のみ版の対を補う）", async () => {
+  // fixture 前提 assert: 対象 rootDir に .git が無い（非 Git 扱いの根拠）ことを先に確かめる
+  const root = await newRoot();
+  const emptyDir = join(root, "works", "empty-non-git");
+  await mkdir(emptyDir, { recursive: true });
+  assert.equal(existsSync(join(root, ".git")), false);
+  const works = await loadWorks({ rootDir: root });
+  const target = findWork(works, "empty-non-git");
+  assert.ok(target, "非 Git の空 dir は欠落エラーとして列挙対象になる");
+  assert.ok(target.errors.some((error) => error.includes("work.json")), JSON.stringify(target));
+});
+
+test("証拠なし生成物 dir の内部は走査しない（node_modules 深部の壊れた symlink に影響されない）", async () => {
+  // fixture 前提 assert: 深部に dangling symlink（lstat は成功・stat は失敗）と通常の生成物が実在すること
+  const root = await newGitRoot();
+  const workDir = join(root, "works", "residue");
+  const deepDir = join(workDir, "node_modules", "deep", "nested");
+  await mkdir(deepDir, { recursive: true });
+  await symlink(join(workDir, "nowhere"), join(deepDir, "dangling-link"));
+  await mkdir(join(workDir, "dist"), { recursive: true });
+  await writeFile(join(workDir, "dist", "bundle.js"), "x");
+  const dangling = lstatSync(join(deepDir, "dangling-link"));
+  assert.ok(dangling.isSymbolicLink(), "事前条件: dangling symlink が置けている");
+  assert.throws(() => statSync(join(deepDir, "dangling-link")), "事前条件: 参照先は実在しない（dangling）");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(!works.some((work) => work.dirName === "residue"), "内部走査せず生成物として除外される");
+});
+
+test("new-work の同 slug 拒否（上書き防止）は維持される", async (t) => {
+  // fixture 前提 assert: 拒否確認に使う正常作品を ROOT_DIR の実在作品から動的に選ぶ
+  // （作品の増減に非依存。拒否は雛形コピーの前に起きるため既存 dir は変更されない）
+  const existing = await loadWorks();
+  const target = existing.find((work) => work.work !== null && work.errors.length === 0);
+  if (!target) return t.skip("拒否確認に使える正常作品が無い");
+  const slug = target.dirName;
+  const workJsonPath = join(ROOT_DIR, "works", slug, "work.json");
+  const before = await readFile(workJsonPath, "utf8");
+  const result = spawnSync(process.execPath, [join(ROOT_DIR, "scripts", "new-work.mjs"), slug], { encoding: "utf8" });
+  assert.notEqual(result.status, 0, `同 slug は拒否される（exit 非 0）: ${result.stdout}`);
+  assert.match(`${result.stderr}\n${result.stdout}`, /既にある/);
+  assert.equal(await readFile(workJsonPath, "utf8"), before, "拒否経路で既存作品は変更されない");
 });
