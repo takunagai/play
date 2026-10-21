@@ -198,6 +198,7 @@ echo "## hashes" >> "$LEDGER"   # hash は生成物（node_modules・dist）を�
 (cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) >> "$LEDGER"
 echo "## symlinks" >> "$LEDGER"   # symlink は path -> 参照先 で記録する
 (cd "$SRC" && find . -type l -printf '%p -> %l\n' | sort) >> "$LEDGER"
+echo "## snapshot-end" >> "$LEDGER"   # ここまでが移動前の不変 snapshot。以降に追記する行は照合の抽出対象にならない
 
 # 移動（-n は既存先を上書きしない。exit code には依存しない。競合時は何もせず exit 0 で返る）
 mv -n "$SRC" "$DEST/cloudbreak"
@@ -208,22 +209,36 @@ test -e "$DEST/cloudbreak"
 test -d "$DEST/cloudbreak"
 test "$(stat -c '%F' "$DEST/cloudbreak")" = directory
 test "$SRC_STAT" = "$(stat -c '%F %U:%G %a' "$DEST/cloudbreak")"   # 移動で型・所有者・権限が変わっていない
+echo "## metadata" >> "$LEDGER"   # 操作結果の記録は不変 snapshot の節に混ぜない
 {
   echo "先の実測（移動後）: realpath=$(realpath "$DEST/cloudbreak")"
   echo "先の型・所有者・権限（移動後）: $(stat -c '%F %U:%G %a' "$DEST/cloudbreak")"
 } >> "$LEDGER"
-diff <(cd "$DEST/cloudbreak" && find . -mindepth 1 -maxdepth 1 | sort) \
-     <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-diff <(cd "$DEST/cloudbreak" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
-     <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-diff <(cd "$DEST/cloudbreak" && find . -type l -printf '%p -> %l\n' | sort) \
-     <(awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+
+# 台帳照合は process substitution に任せない。producer を一時ファイルへ明示生成し、
+# producer の失敗が set -e でその行で止まるようにする（process substitution 内の失敗は
+# diff の exit に伝わらない）。全生成が exit 0 で通ってから diff する。
+# どれか 1 行でも失敗したらその行で終了し、以降の操作も台帳への OK 追記もしない
+ACTUAL_DIR=$(mktemp -d)
+(cd "$DEST/cloudbreak" && find . -mindepth 1 -maxdepth 1 | sort) > "$ACTUAL_DIR/listing.actual"
+(cd "$DEST/cloudbreak" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) > "$ACTUAL_DIR/hashes.actual"
+(cd "$DEST/cloudbreak" && find . -type l -printf '%p -> %l\n' | sort) > "$ACTUAL_DIR/symlinks.actual"
+awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/listing.ledger"
+awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/hashes.ledger"
+awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/symlinks.ledger"
+diff -u "$ACTUAL_DIR/listing.ledger" "$ACTUAL_DIR/listing.actual"
+diff -u "$ACTUAL_DIR/hashes.ledger" "$ACTUAL_DIR/hashes.actual"
+diff -u "$ACTUAL_DIR/symlinks.ledger" "$ACTUAL_DIR/symlinks.actual"
+rm -rf "$ACTUAL_DIR"
 test ! -e "$SRC"   # 元が無い。ただし -e は dangling symlink を「無い」と扱うので、次の -L も独立に必ず実行する
 test ! -L "$SRC"   # dangling symlink 残留はここで終了する
+echo "## result" >> "$LEDGER"
 echo "移動後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 
 - 成功の根拠を `mv -n` の exit code だけにしない（`mv -n` は競合時に何もせず exit 0 で返る）。宛先の実在・型、型・所有者・権限の維持（移動前の `$SRC_STAT` との実測照合）、台帳の listing・hash・symlink の照合、元の不在（`-e` と `-L` の両方。dangling symlink 残留を防ぐ）まで全部確認してから台帳に OK を書く
+- 台帳への追記は節を明示して分ける。移動前の不変 snapshot（`## listing` / `## hashes` / `## symlinks`）は `## snapshot-end` 行で終端し、以降の操作結果（`## metadata` / `## result`）は照合の抽出対象にしない。未終端の節に metadata や OK を追記すると、照合の `awk`（`/^## /` で次の見出しまでを読む）がその行を snapshot の一部として返し、正常な台帳でも差分になって失敗する
+- 台帳照合の producer は process substitution に任せない。`diff <(producer) <(producer)` の形では producer の失敗が `diff` の exit に伝わらず、台帳が存在しない・`awk` が fatal でも比較対象が空のまま次の操作へ進み得る。producer を一時ファイルへ明示生成し（`set -e` が producer の失敗でその行で止まる）、全生成が exit 0 で通ってから `diff` する
 - 確認の連結に `&&` を使わない。Bash の AND-list（`test A && test B`）では左側の `test A` が失敗しても `set -e` で終了せず、次の操作や OK 記録へ進んでしまう（AND-list 中の最終コマンドだけが errexit の対象）。存在・型・照合・元不在・先不在の全段階を独立した単純コマンド（または失敗時に明示 `exit 1` する `if`）で書き、どの段階の失敗でもその行で終了して後続へ進まない
 - 競合・不足・不明は中止で、リトライ判断も含めて人間がする。上書き・一括削除はしない
 - `$DEST` は一意先ごとに値が変わる一時変数なので、復元時は退避先一意先の `ledger.txt` の「保存先:」行と「先（予定）:」行を読んで `$DEST` / `$LEDGER` を確定する（保存先の記録は台帳が正本）
@@ -238,6 +253,7 @@ DEST=$(dirname "$LEDGER")
 # 復元前の確認。元の場所が既に存在したら台帳に中止を記録して終了する（mv は宛先が既存 dir だと
 # その中への移動として扱い入れ子を作るため、宛先の解釈を mv に任せない）
 if [ -e "$SRC" ] || [ -L "$SRC" ]; then
+  echo "## result" >> "$LEDGER"
   echo "復元中止（元の場所が既に存在する）: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
   echo "元の場所が既に存在する: $SRC" >&2
   exit 1
@@ -250,14 +266,21 @@ test -e "$SRC"
 test -d "$SRC"
 test "$(stat -c '%F' "$SRC")" = directory
 test "$(stat -c '%F %U:%G %a' "$SRC")" = "$(awk -F': ' '/^元の型・所有者・権限:/{print $2; exit}' "$LEDGER")"
-diff <(cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) \
-     <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-diff <(cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
-     <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-diff <(cd "$SRC" && find . -type l -printf '%p -> %l\n' | sort) \
-     <(awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+# 台帳照合は移動後と同じく process substitution に任せない（producer を一時ファイルへ明示生成する）
+ACTUAL_DIR=$(mktemp -d)
+(cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) > "$ACTUAL_DIR/listing.actual"
+(cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) > "$ACTUAL_DIR/hashes.actual"
+(cd "$SRC" && find . -type l -printf '%p -> %l\n' | sort) > "$ACTUAL_DIR/symlinks.actual"
+awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/listing.ledger"
+awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/hashes.ledger"
+awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER" > "$ACTUAL_DIR/symlinks.ledger"
+diff -u "$ACTUAL_DIR/listing.ledger" "$ACTUAL_DIR/listing.actual"
+diff -u "$ACTUAL_DIR/hashes.ledger" "$ACTUAL_DIR/hashes.actual"
+diff -u "$ACTUAL_DIR/symlinks.ledger" "$ACTUAL_DIR/symlinks.actual"
+rm -rf "$ACTUAL_DIR"
 test ! -e "$DEST/cloudbreak"
 test ! -L "$DEST/cloudbreak"   # dangling symlink 残留はここで終了する
+echo "## result" >> "$LEDGER"
 echo "復元後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 

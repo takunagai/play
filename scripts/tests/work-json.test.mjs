@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstatSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadWorks } from "../lib/work-json.mjs";
@@ -743,6 +744,98 @@ test("packed-refs に参照先が在るのに object が解決できないなら
   await rm(join(root, ".git", "refs", "heads", "main"));
   await writeFile(join(root, ".git", "packed-refs"), "0123456789012345678901234567890123456789 refs/heads/main\n");
   await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+// ── ここから t_3c3708fc（修正R3）の仕様由来で追加した受入ケース（R2-V1 の packed-refs 境界） ──
+
+/** 「HEAD 唯一の証拠」fixture から loose ref を消したもの（packed-refs 系反例の土台） */
+async function newHeadOnlyEvidenceWithoutLooseRef() {
+  const root = await newHeadOnlyEvidenceRoot("source.txt");
+  await rm(join(root, ".git", "refs", "heads", "main"));
+  return root;
+}
+
+/** fixture 事前条件: loose ref が不在であること（loose が残ると packed-refs 側の反例にならない） */
+function assertLooseRefAbsent(root) {
+  assert.throws(
+    () => lstatSync(join(root, ".git", "refs", "heads", "main")),
+    (error) => error.code === "ENOENT",
+  );
+}
+
+test("HEAD 唯一の証拠 + index 全削除 staged + dist 残存でも packed-refs が dangling symlink なら unborn や成功に潰さず失敗する", async () => {
+  const root = await newHeadOnlyEvidenceWithoutLooseRef();
+  const packed = join(root, ".git", "packed-refs");
+  await symlink("absent-packed-target", packed);
+  assertLooseRefAbsent(root);
+  // 事前条件: packed-refs は lstat 上 symlink で、stat（参照先追跡）では不在＝dangling
+  assert.ok(lstatSync(packed).isSymbolicLink());
+  assert.throws(() => statSync(packed), (error) => error.code === "ENOENT");
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("packed-refs が実在する先への symlink でも unborn に潰さず失敗する", async () => {
+  const root = await newHeadOnlyEvidenceWithoutLooseRef();
+  const packed = join(root, ".git", "packed-refs");
+  // 実体は git が読める有効な packed-refs 形式（別名 refname）にする。git 自身の読み取り失敗で
+  // 止まらず、symlink の実体種別そのもので失敗することを確認する
+  await writeFile(join(root, ".git", "packed-refs.real"), "0123456789012345678901234567890123456789 refs/heads/main2\n");
+  await symlink(join(root, ".git", "packed-refs.real"), packed);
+  assertLooseRefAbsent(root);
+  assert.ok(lstatSync(packed).isSymbolicLink());
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("packed-refs が directory でも unborn に潰さず失敗する", async () => {
+  const root = await newHeadOnlyEvidenceWithoutLooseRef();
+  const packed = join(root, ".git", "packed-refs");
+  await mkdir(packed, { recursive: true });
+  assertLooseRefAbsent(root);
+  assert.ok(lstatSync(packed).isDirectory());
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("packed-refs が読めないときは unborn と誤認せず失敗する", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root では権限制限のテストが無効");
+    return;
+  }
+  const root = await newHeadOnlyEvidenceWithoutLooseRef();
+  const packed = join(root, ".git", "packed-refs");
+  await writeFile(packed, "0123456789012345678901234567890123456789 refs/heads/main\n");
+  await chmod(packed, 0o000);
+  let rejected = false;
+  try {
+    await loadWorks({ rootDir: root });
+  } catch {
+    rejected = true;
+  } finally {
+    await chmod(packed, 0o600);
+  }
+  assert.ok(rejected);
+});
+
+test("packed-refs の refname は完全一致で比較し、前方一致の別名を誤検知しない", async () => {
+  const root = await newGitRoot();
+  const sha = git(root, "rev-parse", "HEAD").trim();
+  await rm(join(root, ".git", "refs", "heads", "main"));
+  await writeFile(join(root, ".git", "packed-refs"), `${sha} refs/heads/main2\n`);
+  // 別名 refname を参照先と誤認して throw せず、正規 unborn 対照として index 証拠から列挙する
+  const works = await loadWorks({ rootDir: root });
+  assert.deepEqual(works.map((work) => work.dirName), ["tide-bloom"]);
+  assert.deepEqual(findWork(works, "tide-bloom")?.errors, []);
+});
+
+test("packed-refs にヘッダと peel 行があっても通常どおり列挙する", async () => {
+  const root = await newGitRoot();
+  const sha = git(root, "rev-parse", "HEAD").trim();
+  await rm(join(root, ".git", "refs", "heads", "main"));
+  await writeFile(
+    join(root, ".git", "packed-refs"),
+    `# pack-refs with: peeled fully-peeled sorted \n${sha} refs/heads/main\n^${sha}\n`,
+  );
+  const works = await loadWorks({ rootDir: root });
+  assert.deepEqual(findWork(works, "tide-bloom")?.errors, []);
 });
 
 test("既定引数では ROOT_DIR の works を読む（worktree の 4 作品、errors 空）", async () => {

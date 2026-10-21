@@ -142,8 +142,9 @@ function runGit(cwd, args) {
  * 断定しない。非空の symbolic-ref 出力だけでも不十分で、dangling symlink や directory として
  * 存在する ref でも symbolic-ref は成功する。そこで参照先の実体 path を Git 自身に解決させ
  * （linked worktree や common dir を考慮）、「HEAD が symbolic かつ参照先 ref の実体が
- * loose・packed ともに存在しない」場合だけ unborn とする。壊れた実体・読み取れない・
- * 確認不能な Git 異常は投げる（unborn に握り潰さない）。
+ * loose・packed ともに存在しない」場合だけ unborn とする。loose の実体と packed-refs は
+ * ともに lstat で実体種別を確認し、壊れた実体・読み取れない・確認不能な Git 異常は投げる
+ * （unborn に握り潰さない）。
  */
 function verifyHeadExists(rootDir) {
   try {
@@ -187,23 +188,43 @@ function verifyHeadExists(rootDir) {
       throw new Error(`HEAD を読み取れない（参照先 ref の実体を確認できない）: ${target} / ${probeError.message}`);
     }
     if (refKind === "missing") {
-      // loose 実体が無くても packed-refs に存在すれば ref は在る（unborn には潰せない）
-      if (existsSync(packedPathAbs)) {
-        let packed;
-        try {
-          packed = readFileSync(packedPathAbs, "utf8");
-        } catch (packedError) {
-          throw new Error(`HEAD を読み取れない（packed-refs を読めない）: ${target} / ${packedError.message}`);
-        }
-        for (const line of packed.split("\n")) {
-          if (line === target || line.startsWith(`${target} `)) {
-            throw new Error(
-              `HEAD を読み取れない（packed-refs に参照先が在るのに HEAD が解決できない）: ${target} / rev-parse: ${verifyError.message}`,
-            );
-          }
-        }
+      // loose 実体が無くても packed-refs に存在すれば ref は在る（unborn には潰せない）。
+      // existsSync は dangling symlink を「無い」と誤認するため、loose 側と同じく lstat で実体種別を確認する
+      let packedKind;
+      try {
+        packedKind = probePathKindSync(packedPathAbs);
+      } catch (packedProbeError) {
+        throw new Error(`HEAD を読み取れない（packed-refs の実体を確認できない）: ${target} / ${packedProbeError.message}`);
       }
-      return false; // 実体がどこにも無い → 正規 unborn（未コミット新規リポジトリ）
+      if (packedKind === "missing") {
+        return false; // loose も packed も実体が無い → 正規 unborn（未コミット新規リポジトリ）
+      }
+      if (packedKind === "symlink") {
+        throw new Error(
+          `HEAD を読み取れない（packed-refs が symlink になっている。壊れた実体は unborn に潰さない）: ${target} / rev-parse: ${verifyError.message}`,
+        );
+      }
+      if (packedKind === "dir") {
+        throw new Error(`HEAD を読み取れない（packed-refs が directory になっている）: ${target} / rev-parse: ${verifyError.message}`);
+      }
+      if (packedKind !== "file") {
+        throw new Error(`HEAD を読み取れない（packed-refs が通常ファイルでない）: ${target} / rev-parse: ${verifyError.message}`);
+      }
+      let packed;
+      try {
+        packed = readFileSync(packedPathAbs, "utf8");
+      } catch (packedError) {
+        throw new Error(`HEAD を読み取れない（packed-refs を読めない）: ${target} / ${packedError.message}`);
+      }
+      for (const line of packed.split("\n")) {
+        // レコードは「<OID> 空白 <refname>」。refname は完全一致で比較する（peel 行 ^<OID> は空白を含まない）
+        const sep = line.indexOf(" ");
+        if (sep <= 0 || line.slice(sep + 1).trimEnd() !== target) continue;
+        throw new Error(
+          `HEAD を読み取れない（packed-refs に参照先が在るのに HEAD が解決できない）: ${target} / rev-parse: ${verifyError.message}`,
+        );
+      }
+      return false; // packed-refs に参照先のレコードが無い → 正規 unborn
     }
     if (refKind === "symlink") {
       throw new Error(
