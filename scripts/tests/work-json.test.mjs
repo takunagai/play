@@ -614,6 +614,84 @@ test("summary は 80 文字まで（コードポイント数）で 81 文字は�
   assert.ok(findWork(works, "bass-well")?.errors.some((error) => error.includes("81 文字")));
 });
 
+// ── ここから t_419775da（検証R1）の仕様由来で追加した受入ケース（V-1/V-2 の Git 証拠統合） ──
+
+/** 「唯一の HEAD 証拠 + index 全削除 staged + 生成物残存」の V-1 系 fixture */
+async function newHeadOnlyEvidenceRoot(fileName) {
+  const root = await newRoot();
+  git(root, "init", "-q", "-b", "main");
+  const srcDir = join(root, "works", "evidence-work", "src");
+  await mkdir(srcDir, { recursive: true });
+  await writeFile(join(srcDir, fileName), "x");
+  git(root, "add", ".");
+  git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "evidence");
+  git(root, "rm", "-q", "-r", "works/evidence-work");
+  await mkdir(join(root, "works", "evidence-work", "dist"), { recursive: true });
+  await writeFile(join(root, "works", "evidence-work", "dist", "bundle.js"), "x");
+  return root;
+}
+
+test("HEAD の唯一の証拠パスにスペースが含まれていても欠落エラーにする", async () => {
+  const root = await newHeadOnlyEvidenceRoot("source file.txt");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "evidence-work")?.errors.length > 0);
+});
+
+test("HEAD の唯一の証拠パスに改行が含まれていても欠落エラーにする", async () => {
+  const root = await newHeadOnlyEvidenceRoot("source\nfile.txt");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "evidence-work")?.errors.length > 0);
+});
+
+test("symbolic HEAD の参照先 ref が読めないときは unborn と誤認せず失敗する", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root では権限制限のテストが無効");
+    return;
+  }
+  const root = await newGitRoot();
+  const ref = join(root, ".git", "refs", "heads", "main");
+  await chmod(ref, 0o000);
+  let rejected = false;
+  try {
+    await loadWorks({ rootDir: root });
+  } catch {
+    rejected = true;
+  } finally {
+    await chmod(ref, 0o600);
+  }
+  assert.ok(rejected);
+});
+
+test("symbolic HEAD の参照先が実在しない object でも unborn や成功に潰さず失敗する", async () => {
+  const root = await newGitRoot();
+  // 40 桁 SHA は rev-parse --verify を通るが object が無く、ls-tree HEAD が失敗する
+  await writeFile(join(root, ".git", "refs", "heads", "main"), "0123456789012345678901234567890123456789\n");
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("worktree（.git が file）でも HEAD 証拠で欠落エラーを検出する", async () => {
+  const root = await newGitRoot();
+  const wtParent = await mkdtemp(join(tmpdir(), "work-json-wt-"));
+  tmpRoots.push(wtParent);
+  const wt = join(wtParent, "wt");
+  git(root, "worktree", "add", "-q", "-b", "wt1", wt);
+  await rm(join(wt, "works", "tide-bloom", "work.json"));
+  const works = await loadWorks({ rootDir: wt });
+  assert.ok(findWork(works, "tide-bloom")?.errors.length > 0);
+});
+
+test("HEAD にだけ証拠が残る作品 dir symlink は候補にならず列挙外のまま", async () => {
+  const root = await newGitRoot();
+  git(root, "rm", "-q", "-r", "--cached", "works/tide-bloom");
+  await rm(join(root, "works", "tide-bloom"), { recursive: true, force: true });
+  const stash = join(root, "stash", "tide-bloom");
+  await mkdir(stash, { recursive: true });
+  await writeFile(join(stash, "index.html"), "x");
+  await symlink(stash, join(root, "works", "tide-bloom"));
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(!works.some((work) => work.dirName === "tide-bloom"));
+});
+
 test("既定引数では ROOT_DIR の works を読む（worktree の 4 作品、errors 空）", async () => {
   const works = await loadWorks();
   assert.deepEqual(
