@@ -402,9 +402,30 @@ test("スペース・改行入りの dir 名や追跡パスでも列挙が壊れ
   assert.deepEqual(findWork(works, "tide-bloom")?.errors, []);
 });
 
+test("HEAD の唯一の証拠パスにタブが含まれていても欠落エラーにする", async () => {
+  const root = await newRoot();
+  git(root, "init", "-q", "-b", "main");
+  const srcDir = join(root, "works", "tab-work", "src");
+  await mkdir(srcDir, { recursive: true });
+  await writeFile(join(srcDir, "source\tfile.txt"), "x");
+  git(root, "add", ".");
+  git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "tab path");
+  git(root, "rm", "-q", "-r", "works/tab-work");
+  await mkdir(join(root, "works", "tab-work", "dist"), { recursive: true });
+  await writeFile(join(root, "works", "tab-work", "dist", "bundle.js"), "x");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "tab-work")?.errors.length > 0);
+});
+
 test("HEAD が破損しているときは unborn と誤認せず失敗する", async () => {
   const root = await newGitRoot();
   await writeFile(join(root, ".git", "HEAD"), "garbage\n");
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("symbolic HEAD の参照先 ref が壊れているときは unborn と誤認せず失敗する", async () => {
+  const root = await newGitRoot();
+  await writeFile(join(root, ".git", "refs", "heads", "main"), "garbage\n");
   await assert.rejects(() => loadWorks({ rootDir: root }));
 });
 

@@ -136,11 +136,30 @@ function runGit(cwd, args) {
   return result.stdout;
 }
 
-/** unborn HEAD（コミットが 1 つも無い新規リポジトリ）のエラーかどうか */
-function isUnbornHead(error) {
-  return /ambiguous argument|unknown revision|bad revision|bad default revision|Needed a single revision/.test(
-    error.stderr ?? "",
-  );
+/**
+ * HEAD の状態を確認する。true なら commit 済み、false なら unborn（コミットが 1 つも無い新規リポジトリ）。
+ * rev-parse の stderr は正規 unborn と壊れた ref で同じ語句になるため、語句一致で unborn を
+ * 断定しない。HEAD が symbolic で参照先がまだ無い場合だけ unborn とし、それ以外の確認不能な
+ * Git 異常（壊れた・読み取れない ref 等）は投げる（unborn に握り潰さない）。
+ */
+function verifyHeadExists(rootDir) {
+  try {
+    runGit(rootDir, ["rev-parse", "--verify", "HEAD"]);
+    return true;
+  } catch (verifyError) {
+    let target;
+    try {
+      target = runGit(rootDir, ["symbolic-ref", "-q", "HEAD"]).trim();
+    } catch (symbolicError) {
+      throw new Error(
+        `HEAD を読み取れない（新規リポジトリ以外の Git 異常は潰さない）: rev-parse: ${verifyError.message} / symbolic-ref: ${symbolicError.message}`,
+      );
+    }
+    if (target === "") {
+      throw new Error(`HEAD を読み取れない（symbolic HEAD の参照先が読めない）: ${verifyError.message}`);
+    }
+    return false; // symbolic HEAD の参照先がまだ無い（未コミット新規リポジトリ）
+  }
 }
 
 /** index / HEAD の works/ 配下のパスから works/<slug>/ の slug を取り出す */
@@ -186,21 +205,13 @@ function collectGitEvidence(rootDir) {
   }
 
   const headSlugs = new Set();
-  let hasHead = true;
-  try {
-    runGit(rootDir, ["rev-parse", "--verify", "HEAD"]);
-  } catch (error) {
-    if (isUnbornHead(error)) {
-      hasHead = false; // 未コミット新規 Git。index の証拠だけで列挙する
-    } else {
-      throw new Error(`HEAD を読み取れない（新規リポジトリ以外の Git 異常は潰さない）: ${error.message}`);
-    }
-  }
+  const hasHead = verifyHeadExists(rootDir);
   if (hasHead) {
+    // --name-only -z の各 NUL レコードは path そのもの。タブはメタデータ区切りではなく
+    // 正当なパスの一部なので、区切り扱いで slice しない
     for (const entry of runGit(rootDir, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "works/"]).split("\0")) {
       if (entry === "") continue;
-      const path = entry.includes("\t") ? entry.slice(entry.indexOf("\t") + 1) : entry;
-      const slug = slugFromWorkPath(path);
+      const slug = slugFromWorkPath(entry);
       if (slug) headSlugs.add(slug);
     }
   }
