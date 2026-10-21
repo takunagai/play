@@ -334,6 +334,265 @@ test("shouldCheckFiles で generatedImages の実在確認が効く（在来シ�
   assert.deepEqual(findWork(unchecked, "aqua-drift")?.errors, []);
 });
 
+// ── ここから t_768f9683 の仕様起点で追加した受入ケース（docs/work-json.md L101-117） ──
+
+test("staged 全削除後に空 dir が残る間は HEAD 証拠で欠落エラー", async () => {
+  const root = await newGitRoot();
+  git(root, "rm", "-q", "-r", "works/tide-bloom");
+  await mkdir(join(root, "works", "tide-bloom"), { recursive: true });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "tide-bloom")?.errors.length > 0);
+});
+
+test("staged 全削除後に生成物 dir が残る間も HEAD 証拠で欠落エラー", async () => {
+  const root = await newGitRoot();
+  git(root, "rm", "-q", "-r", "works/tide-bloom");
+  await mkdir(join(root, "works", "tide-bloom", "dist"), { recursive: true });
+  await writeFile(join(root, "works", "tide-bloom", "dist", "bundle.js"), "x");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "tide-bloom")?.errors.length > 0);
+});
+
+test("削除を commit した後の不在（dir も index 証拠も無し）は列挙しない", async () => {
+  const root = await newGitRoot();
+  git(root, "rm", "-q", "-r", "works/tide-bloom");
+  git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "remove");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(!works.some((work) => work.dirName === "tide-bloom"));
+});
+
+test("語彙外の emotion は未追跡 manifest でも検証エラー", async () => {
+  const root = await newGitRoot();
+  await addWork(root, "odd-work", {
+    files: ["index.html"],
+    work: workJson("odd-work", { emotion: "怒り爆発" }),
+  });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "odd-work")?.errors.length > 0);
+});
+
+test("slug と dir 名の不一致は検証エラー", async () => {
+  const root = await newGitRoot();
+  await addWork(root, "dir-name", { files: ["index.html"], work: workJson("other-slug") });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "dir-name")?.errors.length > 0);
+});
+
+test("rootDir を symlink 経由で渡しても realpath 一致で Git 作業場として列挙する", async () => {
+  const root = await newGitRoot();
+  const linkParent = await mkdtemp(join(tmpdir(), "work-json-link-"));
+  tmpRoots.push(linkParent);
+  const link = join(linkParent, "root-link");
+  await symlink(root, link);
+  const works = await loadWorks({ rootDir: link });
+  assert.deepEqual(findWork(works, "tide-bloom")?.errors, []);
+});
+
+test("スペース・改行入りの dir 名や追跡パスでも列挙が壊れない", async () => {
+  const root = await newGitRoot();
+  const srcDir = join(root, "works", "tide-bloom", "src");
+  await mkdir(srcDir, { recursive: true });
+  await writeFile(join(srcDir, "wei rd file.ts"), "x");
+  await writeFile(join(srcDir, "break\nline.ts"), "x");
+  git(root, "add", ".");
+  git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "spacey");
+  await mkdir(join(root, "works", "resi due\ndir"), { recursive: true });
+  const works = await loadWorks({ rootDir: root });
+  assert.deepEqual(works.map((work) => work.dirName), ["tide-bloom"]);
+  assert.deepEqual(findWork(works, "tide-bloom")?.errors, []);
+});
+
+test("HEAD が破損しているときは unborn と誤認せず失敗する", async () => {
+  const root = await newGitRoot();
+  await writeFile(join(root, ".git", "HEAD"), "garbage\n");
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("index が壊れているときは追跡なし扱いにせず失敗する", async () => {
+  const root = await newGitRoot();
+  await writeFile(join(root, ".git", "index"), "not an index");
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("git コマンド不在では保守的 fallback（manifest なしは空でもエラー、ありは検証）", async () => {
+  const root = await newRoot();
+  await addWork(root, "plain-work", { files: ["index.html"] });
+  await mkdir(join(root, "works", "residue"), { recursive: true });
+  const originalPath = process.env.PATH;
+  process.env.PATH = "/nonexistent-for-work-json-test";
+  let works;
+  try {
+    works = await loadWorks({ rootDir: root });
+  } finally {
+    process.env.PATH = originalPath;
+  }
+  assert.ok(findWork(works, "residue")?.errors.some((error) => error.includes("work.json")));
+  assert.deepEqual(findWork(works, "plain-work")?.errors, []);
+});
+
+test("親 repo に包含される非 Git ROOT は非 Git として保守的に扱う", async () => {
+  const parent = await newRoot();
+  git(parent, "init", "-q", "-b", "main");
+  const root = join(parent, "app");
+  await mkdir(join(root, "works"), { recursive: true });
+  await addWork(root, "plain-work", { files: ["index.html"] });
+  await mkdir(join(root, "works", "residue", "node_modules"), { recursive: true });
+  await writeFile(join(root, "works", "residue", "node_modules", "x.js"), "x");
+  const works = await loadWorks({ rootDir: root });
+  assert.deepEqual(findWork(works, "plain-work")?.errors, []);
+  assert.ok(findWork(works, "residue")?.errors.some((error) => error.includes("work.json")));
+});
+
+test("cwd が違っても rootDir の列挙結果は同じ", async () => {
+  const root = await newGitRoot();
+  const originalCwd = process.cwd();
+  process.chdir(tmpdir());
+  try {
+    const works = await loadWorks({ rootDir: root });
+    assert.deepEqual(works.map((work) => work.dirName), ["tide-bloom"]);
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
+
+test("gitignore 済みでも証拠なし dir の src/ は除外されない", async () => {
+  const root = await newGitRoot();
+  await writeFile(join(root, ".gitignore"), "works/ghost-src/\n");
+  const workDir = join(root, "works", "ghost-src");
+  await mkdir(join(workDir, "src"), { recursive: true });
+  await writeFile(join(workDir, "src", "main.ts"), "x");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "ghost-src")?.errors.some((error) => error.includes("work.json")));
+});
+
+test("work.json が読めないならエラーを隠さない", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root では権限制限のテストが無効");
+    return;
+  }
+  const root = await newGitRoot();
+  await addWork(root, "aqua-drift", { files: ["index.html"] });
+  const manifest = join(root, "works", "aqua-drift", "work.json");
+  await chmod(manifest, 0o000);
+  let works;
+  try {
+    works = await loadWorks({ rootDir: root });
+  } finally {
+    await chmod(manifest, 0o600);
+  }
+  assert.ok(findWork(works, "aqua-drift")?.errors.length > 0);
+});
+
+test("未コミット新規 Git では証拠が index のみでも src/ だけの dir はエラー", async () => {
+  const root = await newRoot();
+  git(root, "init", "-q", "-b", "main");
+  await mkdir(join(root, "works", "half-made", "src"), { recursive: true });
+  await writeFile(join(root, "works", "half-made", "src", "main.ts"), "x");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "half-made")?.errors.some((error) => error.includes("work.json")));
+});
+
+// ── ここから t_768f9683 の実装参照後に追加した内部境界ケース ──
+
+test("works/ 自体が無くても index 残留 slug は欠落エラーで列挙する", async () => {
+  const root = await newGitRoot();
+  await rm(join(root, "works"), { recursive: true, force: true });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "tide-bloom")?.errors.length > 0);
+});
+
+test("works 直下の追跡ファイルは index 候補として「ディレクトリでない」エラー", async () => {
+  const root = await newGitRoot();
+  await writeFile(join(root, "works", "stray.txt"), "x");
+  git(root, "add", "works/stray.txt");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "stray.txt")?.errors.some((error) => error.includes("ディレクトリでない")));
+});
+
+test("work.json が通常ファイル以外（FIFO）ならエラー", async (t) => {
+  const root = await newGitRoot();
+  const workDir = join(root, "works", "aqua-drift");
+  await mkdir(workDir, { recursive: true });
+  const manifest = join(workDir, "work.json");
+  const fifo = spawnSync("mkfifo", [manifest]);
+  if (fifo.error || fifo.status !== 0) {
+    t.skip("mkfifo を使えない環境");
+    return;
+  }
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "aqua-drift")?.errors.some((error) => error.includes("通常ファイルでない")));
+});
+
+test("works/ の走査が拒否されたらエラーを隠さない", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root では権限制限のテストが無効");
+    return;
+  }
+  const root = await newGitRoot();
+  await chmod(join(root, "works"), 0o000);
+  let rejected = false;
+  try {
+    await loadWorks({ rootDir: root });
+  } catch {
+    rejected = true;
+  } finally {
+    await chmod(join(root, "works"), 0o700);
+  }
+  assert.ok(rejected);
+});
+
+test("work.json が配列ならオブジェクト検証でエラー", async () => {
+  const root = await newGitRoot();
+  const workDir = join(root, "works", "aqua-drift");
+  await mkdir(workDir, { recursive: true });
+  await writeFile(join(workDir, "work.json"), "[]");
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "aqua-drift")?.errors.some((error) => error.includes("オブジェクト")));
+});
+
+test("date が実在しない暦日ならエラー", async () => {
+  const root = await newGitRoot();
+  await addWork(root, "aqua-drift", {
+    files: ["index.html"],
+    work: workJson("aqua-drift", { date: "2026-02-30" }),
+  });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "aqua-drift")?.errors.some((error) => error.includes("date")));
+});
+
+test("generatedImages が上限を超えるとエラー", async () => {
+  const root = await newGitRoot();
+  const images = Array.from({ length: 11 }, (_, index) => ({ file: `a${index}.png`, prompt: "p", model: "m" }));
+  await addWork(root, "aqua-drift", { files: ["index.html"], work: workJson("aqua-drift", { generatedImages: images }) });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "aqua-drift")?.errors.some((error) => error.includes("上限")));
+});
+
+test("autopilot で MIT 以外の license はエラー", async () => {
+  const root = await newGitRoot();
+  await addWork(root, "aqua-drift", {
+    files: ["index.html"],
+    work: workJson("aqua-drift", { license: "AGPL-3.0" }),
+  });
+  const works = await loadWorks({ rootDir: root });
+  assert.ok(findWork(works, "aqua-drift")?.errors.some((error) => error.includes("license")));
+});
+
+test("summary は 80 文字まで（コードポイント数）で 81 文字はエラー", async () => {
+  const root = await newGitRoot();
+  await addWork(root, "aqua-drift", {
+    files: ["index.html"],
+    work: workJson("aqua-drift", { summary: "あ".repeat(80) }),
+  });
+  await addWork(root, "bass-well", {
+    files: ["index.html"],
+    work: workJson("bass-well", { summary: "あ".repeat(81) }),
+  });
+  const works = await loadWorks({ rootDir: root });
+  assert.deepEqual(findWork(works, "aqua-drift")?.errors, []);
+  assert.ok(findWork(works, "bass-well")?.errors.some((error) => error.includes("81 文字")));
+});
+
 test("既定引数では ROOT_DIR の works を読む（worktree の 4 作品、errors 空）", async () => {
   const works = await loadWorks();
   assert.deepEqual(
