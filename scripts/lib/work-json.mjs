@@ -1,9 +1,9 @@
 // work.json の契約（VPS の kickoff と共有する。仕様の正本は docs/work-json.md）
 // 語彙はスキル interactive-art-builder の references/wizard.md の選択肢ラベルと完全一致させる。
 import { readdir, readFile, lstat } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const VOCABULARY = {
@@ -139,8 +139,11 @@ function runGit(cwd, args) {
 /**
  * HEAD の状態を確認する。true なら commit 済み、false なら unborn（コミットが 1 つも無い新規リポジトリ）。
  * rev-parse の stderr は正規 unborn と壊れた ref で同じ語句になるため、語句一致で unborn を
- * 断定しない。HEAD が symbolic で参照先がまだ無い場合だけ unborn とし、それ以外の確認不能な
- * Git 異常（壊れた・読み取れない ref 等）は投げる（unborn に握り潰さない）。
+ * 断定しない。非空の symbolic-ref 出力だけでも不十分で、dangling symlink や directory として
+ * 存在する ref でも symbolic-ref は成功する。そこで参照先の実体 path を Git 自身に解決させ
+ * （linked worktree や common dir を考慮）、「HEAD が symbolic かつ参照先 ref の実体が
+ * loose・packed ともに存在しない」場合だけ unborn とする。壊れた実体・読み取れない・
+ * 確認不能な Git 異常は投げる（unborn に握り潰さない）。
  */
 function verifyHeadExists(rootDir) {
   try {
@@ -158,7 +161,87 @@ function verifyHeadExists(rootDir) {
     if (target === "") {
       throw new Error(`HEAD を読み取れない（symbolic HEAD の参照先が読めない）: ${verifyError.message}`);
     }
-    return false; // symbolic HEAD の参照先がまだ無い（未コミット新規リポジトリ）
+    if (!target.startsWith("refs/")) {
+      throw new Error(`HEAD を読み取れない（symbolic HEAD の参照先が ref 形式でない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    let refPath;
+    let packedPath;
+    try {
+      refPath = runGit(rootDir, ["rev-parse", "--git-path", target]).trim();
+      packedPath = runGit(rootDir, ["rev-parse", "--git-path", "packed-refs"]).trim();
+    } catch (resolveError) {
+      throw new Error(
+        `HEAD を読み取れない（参照先 ref の path を解決できない）: ${target} / rev-parse: ${verifyError.message} / git-path: ${resolveError.message}`,
+      );
+    }
+    if (refPath === "" || packedPath === "") {
+      throw new Error(`HEAD を読み取れない（参照先 ref の path が空）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    // --git-path の出力は git プロセスの cwd（rootDir）相対になることがある
+    const refPathAbs = isAbsolute(refPath) ? refPath : join(rootDir, refPath);
+    const packedPathAbs = isAbsolute(packedPath) ? packedPath : join(rootDir, packedPath);
+    let refKind;
+    try {
+      refKind = probePathKindSync(refPathAbs);
+    } catch (probeError) {
+      throw new Error(`HEAD を読み取れない（参照先 ref の実体を確認できない）: ${target} / ${probeError.message}`);
+    }
+    if (refKind === "missing") {
+      // loose 実体が無くても packed-refs に存在すれば ref は在る（unborn には潰せない）
+      if (existsSync(packedPathAbs)) {
+        let packed;
+        try {
+          packed = readFileSync(packedPathAbs, "utf8");
+        } catch (packedError) {
+          throw new Error(`HEAD を読み取れない（packed-refs を読めない）: ${target} / ${packedError.message}`);
+        }
+        for (const line of packed.split("\n")) {
+          if (line === target || line.startsWith(`${target} `)) {
+            throw new Error(
+              `HEAD を読み取れない（packed-refs に参照先が在るのに HEAD が解決できない）: ${target} / rev-parse: ${verifyError.message}`,
+            );
+          }
+        }
+      }
+      return false; // 実体がどこにも無い → 正規 unborn（未コミット新規リポジトリ）
+    }
+    if (refKind === "symlink") {
+      throw new Error(
+        `HEAD を読み取れない（参照先 ref が symlink になっている。壊れた実体は unborn に潰さない）: ${target} / rev-parse: ${verifyError.message}`,
+      );
+    }
+    if (refKind === "dir") {
+      throw new Error(`HEAD を読み取れない（参照先 ref が directory になっている）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    if (refKind !== "file") {
+      throw new Error(`HEAD を読み取れない（参照先 ref が通常ファイルでない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    let content;
+    try {
+      content = readFileSync(refPathAbs, "utf8").trim();
+    } catch (readError) {
+      throw new Error(`HEAD を読み取れない（参照先 ref を読めない）: ${target} / ${readError.message}`);
+    }
+    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(content)) {
+      throw new Error(`HEAD を読み取れない（参照先 ref の中身が object SHA でない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    throw new Error(
+      `HEAD を読み取れない（参照先 ref の中身は object 形式だが HEAD が解決できない）: ${target} → ${content} / rev-parse: ${verifyError.message}`,
+    );
+  }
+}
+
+/** probePathKind の同期版。ENOENT は "missing"、lstat のその他の失敗は投げる（潰さない） */
+function probePathKindSync(path) {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return "symlink";
+    if (stat.isDirectory()) return "dir";
+    if (stat.isFile()) return "file";
+    return "other";
+  } catch (error) {
+    if (error.code === "ENOENT") return "missing";
+    throw error;
   }
 }
 

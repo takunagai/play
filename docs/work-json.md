@@ -119,9 +119,9 @@ window.__art = {
 
 ## 人間が作品制作を安全に再開する手順
 
-作業途中で止めた作品と基盤スクリプトの修正を、人間だけが再開するための手順。以下の現状は 2026-10-22 00:33 JST の実測なので、使う前に読み直す。
+作業途中で止めた作品と基盤スクリプトの修正を、人間だけが再開するための手順。以下の現状は 2026-10-22 00:33 JST の実測なので、使う前に読み直す。この節に書いた SHA・件数は観測時点の記録であり、以後の commit で進む。再開時に照合する正本は最終検証報告に記載の exact HEAD で、この節の SHA を都度更新しない。
 
-- 基盤修正: branch `fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`: d6d3fa3 残存物除外の実装 / d6909c8 文書 / f3fdd19 受入テスト / 3ba5ec0b 初回レビュー指摘の是正）が repo 外 worktree `/home/hermes/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
+- 基盤修正: branch `fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`: d6d3fa3 残存物除外の実装 / d6909c8 文書 / f3fdd19 受入テスト / 3ba5ec0b 初回レビュー指摘の是正。この SHA は上記観測時点の記録で、以後の修正 commit で進む。再開時は最終検証報告の exact HEAD を正本に照合する）が repo 外 worktree `/home/hermes/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
 - 主 repo `/home/hermes/work/code/play`（2026-10-22 00:33 JST の read-only 再測定）: branch `feat/work-abyss-winder`、HEAD = base `9bc0540`、status 空、remote に同 branch なし（remote の branch は main・feat/work-cloudbreak・ci/check-workflow のみ）。worktree 登録は主 repo・基盤成果 dir・review dir の 3 件で、`.worktrees/` は空の容器。`works/cloudbreak/` には生成物だけの残存（`dist/` と `node_modules/`、約 142MB。cloudbreak 本体は `feat/work-cloudbreak`、PR #8 は ready だが未 merge）
 - 主 repo の観測は時点で区別して記録する: 構想カード t_11da0136 の着手時（2026-10-20）は status が `?? .worktrees/` の dirty、初回レビュー時（2026-10-22 00:05 JST 前後）は status 空・`.worktrees/` は空容器だった。誰がいつ以前のネスト checkout を整理したかは未確認で、当時 dirty だった事実は現在の空 status で消えたわけではない。これ以後の read-only 測定も同じように時点を付ける
 
@@ -158,7 +158,7 @@ abyss-winder 系カードの全体表（2026-10-22 00:33 JST に kanban から�
 
 ### 2. 基盤修正を本番に反映する（推奨: 共有 dir 継続案）
 
-- push と新規 PR の承認を人間から取ってから、`fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`）を独立した基盤 PR として出し、人間が merge する。基盤 commit を現作品 PR に混ぜない。承認前は push / 新規 PR をしない
+- push と新規 PR の承認を人間から取ってから、`fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`。観測時点の記録であり正本ではない。正本は最終検証報告の exact HEAD）を独立した基盤 PR として出し、人間が merge する。基盤 commit を現作品 PR に混ぜない。承認前は push / 新規 PR をしない
 - 共有 dir 継続（推奨）の経路: 独立基盤 PR の push・新規 PR 承認 → 人間 merge → 承認済み base を作品 branch へ反映 → 全後継タスクの共有 dir 固定・HEAD 整合 → 実作業場で品質ゲート → 別途「元タスク再開の承認」を取り、人間だけが再開する
 - この経路はこの文書の観測時点（2026-10-22 00:33 JST）では未実行。基盤のローカル成功（テスト・check・build が緑）だけでは、止めたままの元カードが直ったことにならない
 - merge 後、承認済み base を作品 branch へ反映し、実際の再開 HEAD に修正が含まれることを `git log` で確認する
@@ -166,7 +166,7 @@ abyss-winder 系カードの全体表（2026-10-22 00:33 JST に kanban から�
 
 ### 3. cloudbreak 残存の退避（任意。この文書の観測時点では未実行）
 
-必要になったときだけ人間が手で実行する。退避先は repo 外の親 `/home/hermes/work/play-residue-backups` に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先（`$DEST`）にする。一意先には台帳 `ledger.txt` を残す（元と先の realpath・型・所有者・記録時点・直下一覧・hash・symlink・各確認結果・保存先）。移動後・復元後の実在確認はコマンドで実測し、台帳の内容と照合してから台帳に結果を追記する。
+必要になったときだけ人間が手で実行する。退避先は repo 外の親 `/home/hermes/work/play-residue-backups` に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先（`$DEST`）にする。一意先には台帳 `ledger.txt` を残す（元と先の realpath・型・所有者・権限・記録時点・直下一覧・hash・symlink の path と参照先・各確認結果・保存先）。移動後・復元後の実在確認はコマンドで実測し、台帳の内容と照合してから台帳に結果を追記する。確認の各行は `&&` で連結せず独立した単純コマンドにする（Bash の AND-list は左側失敗で `set -e` が止まらないため）。
 
 ```bash
 set -euo pipefail
@@ -183,57 +183,85 @@ df -T "$PARENT" /home/hermes/work/code/play/works   # 両辺の FS・空き容�
 # 一意退避先と台帳
 DEST=$(mktemp -d "$PARENT/t_11da0136-cloudbreak.XXXXXXXX")
 LEDGER="$DEST/ledger.txt"
+SRC_STAT=$(stat -c '%F %U:%G %a' "$SRC")
 {
   echo "ledger: t_11da0136-cloudbreak"
   echo "記録時点: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "保存先（この台帳の絶対 path。\$DEST は実行ごとの一時変数なので復元時はこの行を読む）: $LEDGER"
   echo "元: $SRC realpath=$(realpath "$SRC")"
-  echo "先: $DEST/cloudbreak"
-  echo "元の型・所有者・権限: $(stat -c '%F %U:%G %a' "$SRC")"
+  echo "元の型・所有者・権限: $SRC_STAT"
+  echo "先（予定）: $DEST/cloudbreak"
   echo "## listing"
 } > "$LEDGER"
 (cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) >> "$LEDGER"
 echo "## hashes" >> "$LEDGER"   # hash は生成物（node_modules・dist）を除いた中身に絞る（巨大になるため）
 (cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) >> "$LEDGER"
-echo "## symlinks" >> "$LEDGER"
-(cd "$SRC" && find . -type l | sort) >> "$LEDGER"
+echo "## symlinks" >> "$LEDGER"   # symlink は path -> 参照先 で記録する
+(cd "$SRC" && find . -type l -printf '%p -> %l\n' | sort) >> "$LEDGER"
 
-# 移動（-n は既存先を上書きしない。exit code だけでは成功と判定しない）
+# 移動（-n は既存先を上書きしない。exit code には依存しない。競合時は何もせず exit 0 で返る）
 mv -n "$SRC" "$DEST/cloudbreak"
 
-# 移動後の確認。どれか 1 つでも失敗したらそこで中止する（上書き・一括削除はしない）
-test -d "$DEST/cloudbreak" && test "$(stat -c '%F' "$DEST/cloudbreak")" = directory
+# 移動後の確認。1 行 1 コマンドの独立した単純コマンドにする（AND-list にしない）。
+# どれか 1 行でも失敗したらその行で終了し、以降の操作も台帳への OK 追記もしない
+test -e "$DEST/cloudbreak"
+test -d "$DEST/cloudbreak"
+test "$(stat -c '%F' "$DEST/cloudbreak")" = directory
+test "$SRC_STAT" = "$(stat -c '%F %U:%G %a' "$DEST/cloudbreak")"   # 移動で型・所有者・権限が変わっていない
+{
+  echo "先の実測（移動後）: realpath=$(realpath "$DEST/cloudbreak")"
+  echo "先の型・所有者・権限（移動後）: $(stat -c '%F %U:%G %a' "$DEST/cloudbreak")"
+} >> "$LEDGER"
 diff <(cd "$DEST/cloudbreak" && find . -mindepth 1 -maxdepth 1 | sort) \
      <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
 diff <(cd "$DEST/cloudbreak" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
      <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-test ! -e "$SRC" && test ! -L "$SRC"
+diff <(cd "$DEST/cloudbreak" && find . -type l -printf '%p -> %l\n' | sort) \
+     <(awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+test ! -e "$SRC"   # 元が無い。ただし -e は dangling symlink を「無い」と扱うので、次の -L も独立に必ず実行する
+test ! -L "$SRC"   # dangling symlink 残留はここで終了する
 echo "移動後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 
-- 成功の根拠を `mv -n` の exit code だけにしない。宛先の実在・型、台帳の listing と hash の照合、元の不在（`-e` と `-L` の両方。dangling symlink 残留を防ぐ）まで全部確認してから台帳に OK を書く
-- `set -euo pipefail` により、確認のどれかが失敗したらその時点で異常終了する。競合・不足・不明は中止で、リトライ判断も含めて人間がする。上書き・一括削除はしない
-- `$DEST` は一意先ごとに値が変わる一時変数なので、復元時は退避先一意先の `ledger.txt` の「先:」行を読んで `$DEST` / `$LEDGER` を確定する（保存先の記録は台帳が正本）
-- 復元は、元の場所の不在を同じ 2 つの test で確認してから:
+- 成功の根拠を `mv -n` の exit code だけにしない（`mv -n` は競合時に何もせず exit 0 で返る）。宛先の実在・型、型・所有者・権限の維持（移動前の `$SRC_STAT` との実測照合）、台帳の listing・hash・symlink の照合、元の不在（`-e` と `-L` の両方。dangling symlink 残留を防ぐ）まで全部確認してから台帳に OK を書く
+- 確認の連結に `&&` を使わない。Bash の AND-list（`test A && test B`）では左側の `test A` が失敗しても `set -e` で終了せず、次の操作や OK 記録へ進んでしまう（AND-list 中の最終コマンドだけが errexit の対象）。存在・型・照合・元不在・先不在の全段階を独立した単純コマンド（または失敗時に明示 `exit 1` する `if`）で書き、どの段階の失敗でもその行で終了して後続へ進まない
+- 競合・不足・不明は中止で、リトライ判断も含めて人間がする。上書き・一括削除はしない
+- `$DEST` は一意先ごとに値が変わる一時変数なので、復元時は退避先一意先の `ledger.txt` の「保存先:」行と「先（予定）:」行を読んで `$DEST` / `$LEDGER` を確定する（保存先の記録は台帳が正本）
+- 復元は、元の場所の不在（`-e` と `-L` の両方）を明示 `if` で確認してからにする。`mv` は宛先が既存 directory だと「その中への移動」として扱い入れ子を作り得るため、宛先の解釈を `mv` に任せず、競合時は台帳に中止を記録して終了する:
 
 ```bash
 set -euo pipefail
 SRC=/home/hermes/work/code/play/works/cloudbreak
 LEDGER=/home/hermes/work/play-residue-backups/t_11da0136-cloudbreak.XXXXXXXX/ledger.txt   # 実在の一意先を指定
 DEST=$(dirname "$LEDGER")
-test ! -e "$SRC" && test ! -L "$SRC"
-mv -n "$DEST/cloudbreak" "$SRC"
 
-# 復元後の確認: 元の実在・型・台帳照合と、退避先の不在（-e と -L の双方）
-test -d "$SRC" && test "$(stat -c '%F' "$SRC")" = directory
+# 復元前の確認。元の場所が既に存在したら台帳に中止を記録して終了する（mv は宛先が既存 dir だと
+# その中への移動として扱い入れ子を作るため、宛先の解釈を mv に任せない）
+if [ -e "$SRC" ] || [ -L "$SRC" ]; then
+  echo "復元中止（元の場所が既に存在する）: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
+  echo "元の場所が既に存在する: $SRC" >&2
+  exit 1
+fi
+mv -n "$DEST/cloudbreak" "$SRC"   # exit code には依存しない。競合時は何もせず exit 0 で返る
+
+# 復元後の確認: 元の実在・型・台帳照合（listing・hash・symlink・型/所有者/権限）と、退避先の不在（-e と -L 双方）。
+# 1 行 1 コマンドの独立した単純コマンドにし、どれか 1 行でも失敗したらその行で終了し OK 追記へ進まない
+test -e "$SRC"
+test -d "$SRC"
+test "$(stat -c '%F' "$SRC")" = directory
+test "$(stat -c '%F %U:%G %a' "$SRC")" = "$(awk -F': ' '/^元の型・所有者・権限:/{print $2; exit}' "$LEDGER")"
 diff <(cd "$SRC" && find . -mindepth 1 -maxdepth 1 | sort) \
      <(awk '/^## listing$/{f=1;next} /^## /{f=0} f' "$LEDGER")
 diff <(cd "$SRC" && find . -type f ! -path './node_modules/*' ! -path './dist/*' -exec sha256sum {} + | sort -k 2) \
      <(awk '/^## hashes$/{f=1;next} /^## /{f=0} f' "$LEDGER")
-test ! -e "$DEST/cloudbreak" && test ! -L "$DEST/cloudbreak"
+diff <(cd "$SRC" && find . -type l -printf '%p -> %l\n' | sort) \
+     <(awk '/^## symlinks$/{f=1;next} /^## /{f=0} f' "$LEDGER")
+test ! -e "$DEST/cloudbreak"
+test ! -L "$DEST/cloudbreak"   # dangling symlink 残留はここで終了する
 echo "復元後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 ```
 
-- 復元後も `set -euo pipefail` で、確認のどれかが失敗したらそこで中止する。上書き・一括削除はしない
+- 復元後も移動後と同じ独立単純コマンドで、どれか 1 行でも失敗したらその行で終了し、台帳の OK 追記には進まない。上書き・一括削除はしない
 - 退避先では node_modules の symlink が壊れるため、退避先で install / build 等の実行環境を掘らない
 
 ### 4. 再開前の検証ゲート

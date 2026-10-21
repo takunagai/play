@@ -429,6 +429,24 @@ test("symbolic HEAD の参照先 ref が壊れているときは unborn と誤�
   await assert.rejects(() => loadWorks({ rootDir: root }));
 });
 
+test("symbolic HEAD の参照先 ref が dangling symlink でも unborn と誤認せず失敗する", async () => {
+  const root = await newGitRoot();
+  const ref = join(root, ".git", "refs", "heads", "main");
+  await rm(ref);
+  // 存在しない参照先への symlink（.git/refs/heads/absent-target に解決され、実体は無い）。
+  // symbolic-ref は refs/heads/main を返すので、非空の出力だけでは unborn を断定できない
+  await symlink("absent-target", ref);
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
+test("symbolic HEAD の参照先 ref が directory でも unborn と誤認せず失敗する", async () => {
+  const root = await newGitRoot();
+  const ref = join(root, ".git", "refs", "heads", "main");
+  await rm(ref);
+  await mkdir(ref, { recursive: true });
+  await assert.rejects(() => loadWorks({ rootDir: root }));
+});
+
 test("index が壊れているときは追跡なし扱いにせず失敗する", async () => {
   const root = await newGitRoot();
   await writeFile(join(root, ".git", "index"), "not an index");
