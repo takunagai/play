@@ -121,8 +121,8 @@ window.__art = {
 
 作業途中で止めた作品と基盤スクリプトの修正を、人間だけが再開するための手順。以下の現状は 2026-10-22 00:33 JST の実測なので、使う前に読み直す。この節に書いた SHA・件数は観測時点の記録であり、以後の commit で進む。再開時に照合する正本は最終検証報告に記載の exact HEAD で、この節の SHA を都度更新しない。
 
-- 基盤修正: branch `fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`: d6d3fa3 残存物除外の実装 / d6909c8 文書 / f3fdd19 受入テスト / 3ba5ec0b 初回レビュー指摘の是正。この SHA は上記観測時点の記録で、以後の修正 commit で進む。再開時は最終検証報告の exact HEAD を正本に照合する）が repo 外 worktree `/home/hermes/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
-- 主 repo `/home/hermes/work/code/play`（2026-10-22 00:33 JST の read-only 再測定）: branch `feat/work-abyss-winder`、HEAD = base `9bc0540`、status 空、remote に同 branch なし（remote の branch は main・feat/work-cloudbreak・ci/check-workflow のみ）。worktree 登録は主 repo・基盤成果 dir・review dir の 3 件で、`.worktrees/` は空の容器。`works/cloudbreak/` には生成物だけの残存（`dist/` と `node_modules/`、約 142MB。cloudbreak 本体は `feat/work-cloudbreak`、PR #8 は ready だが未 merge）
+- 基盤修正: branch `fix/work-discovery-residue`（base `9bc0540` から 4 commits、HEAD `3ba5ec0b`: d6d3fa3 残存物除外の実装 / d6909c8 文書 / f3fdd19 受入テスト / 3ba5ec0b 初回レビュー指摘の是正。この SHA は上記観測時点の記録で、以後の修正 commit で進む。再開時は最終検証報告の exact HEAD を正本に照合する）が repo 外 worktree `~/work/play-worktrees/work-discovery-residue` にある。push・PR は未実施
+- 主 repo `~/work/code/play`（2026-10-22 00:33 JST の read-only 再測定）: branch `feat/work-abyss-winder`、HEAD = base `9bc0540`、status 空、remote に同 branch なし（remote の branch は main・feat/work-cloudbreak・ci/check-workflow のみ）。worktree 登録は主 repo・基盤成果 dir・review dir の 3 件で、`.worktrees/` は空の容器。`works/cloudbreak/` には生成物だけの残存（`dist/` と `node_modules/`、約 142MB。cloudbreak 本体は `feat/work-cloudbreak`、PR #8 は ready だが未 merge）
 - 主 repo の観測は時点で区別して記録する: 構想カード t_11da0136 の着手時（2026-10-20）は status が `?? .worktrees/` の dirty、初回レビュー時（2026-10-22 00:05 JST 前後）は status 空・`.worktrees/` は空容器だった。誰がいつ以前のネスト checkout を整理したかは未確認で、当時 dirty だった事実は現在の空 status で消えたわけではない。これ以後の read-only 測定も同じように時点を付ける
 
 ### 1. 現状の再確認
@@ -130,10 +130,10 @@ window.__art = {
 並行 worker の停止合意（同期・dev・install・build 等）を人間が取り、元タスクと全後続タスクの status / workspace、branch / HEAD / base / remote を確認してから:
 
 ```bash
-git -C /home/hermes/work/code/play branch --show-current   # feat/work-abyss-winder
-git -C /home/hermes/work/code/play rev-parse HEAD          # 9bc0540 で始まる SHA
-git -C /home/hermes/work/code/play status --short          # 空
-git -C /home/hermes/work/code/play worktree list
+git -C ~/work/code/play branch --show-current   # feat/work-abyss-winder
+git -C ~/work/code/play rev-parse HEAD          # 9bc0540 で始まる SHA
+git -C ~/work/code/play status --short          # 空
+git -C ~/work/code/play worktree list
 ```
 
 実測と違う・未知の変更があったら中止する。
@@ -142,15 +142,15 @@ abyss-winder 系カードの全体表（2026-10-22 00:33 JST に kanban から�
 
 | カード | 役割 | 担当 | status | workspace | 依存する親 |
 |---|---|---|---|---|---|
-| t_11da0136 | 構想（元カード） | coder | blocked | dir /home/hermes/work/code/play | t_b5bd5fa7（完了済み） |
-| t_e1a3dbb9 | デザイン | web-designer | todo | dir /home/hermes/work/code/play | t_11da0136 |
-| t_085031c7 | 素材 | image-designer | todo | dir /home/hermes/work/code/play | t_11da0136 |
-| t_8ddf2fec | 実装 1（円周操作・描写） | coder | todo | dir /home/hermes/work/code/play | t_e1a3dbb9・t_085031c7 |
-| t_91bc3972 | 実装 2（音響同期・仕上げ） | coder | todo | dir /home/hermes/work/code/play | t_8ddf2fec |
-| t_42c428aa | 検証 | tester | todo | worktree /home/hermes/work/code/play | t_91bc3972 |
-| t_deaf60e5 | 見た目 | web-designer | todo | worktree /home/hermes/work/code/play | t_42c428aa |
-| t_03b1f641 | レビュー | reviewer | todo | worktree /home/hermes/work/code/play | t_11da0136・t_8ddf2fec・t_91bc3972・t_42c428aa |
-| t_3ac0dc1b | 統合 | eng-lead | todo | dir /home/hermes/work/code/play | 上記 8 枚すべて |
+| t_11da0136 | 構想（元カード） | coder | blocked | dir ~/work/code/play | t_b5bd5fa7（完了済み） |
+| t_e1a3dbb9 | デザイン | web-designer | todo | dir ~/work/code/play | t_11da0136 |
+| t_085031c7 | 素材 | image-designer | todo | dir ~/work/code/play | t_11da0136 |
+| t_8ddf2fec | 実装 1（円周操作・描写） | coder | todo | dir ~/work/code/play | t_e1a3dbb9・t_085031c7 |
+| t_91bc3972 | 実装 2（音響同期・仕上げ） | coder | todo | dir ~/work/code/play | t_8ddf2fec |
+| t_42c428aa | 検証 | tester | todo | worktree ~/work/code/play | t_91bc3972 |
+| t_deaf60e5 | 見た目 | web-designer | todo | worktree ~/work/code/play | t_42c428aa |
+| t_03b1f641 | レビュー | reviewer | todo | worktree ~/work/code/play | t_11da0136・t_8ddf2fec・t_91bc3972・t_42c428aa |
+| t_3ac0dc1b | 統合 | eng-lead | todo | dir ~/work/code/play | 上記 8 枚すべて |
 
 - 元カード t_11da0136 の再開は人間だけが行う（取得時点では blocked。着手前の pnpm check 失敗で停止しており、モデル指定は gpt-6.1-sol / openai-codex）
 - 実行順序は表の親列のとおり（t_e1a3dbb9 と t_085031c7 は並行可）。統合 t_3ac0dc1b は blocked の元カードを含む 8 枚すべての完了が親条件
@@ -162,23 +162,23 @@ abyss-winder 系カードの全体表（2026-10-22 00:33 JST に kanban から�
 - 共有 dir 継続（推奨）の経路: 独立基盤 PR の push・新規 PR 承認 → 人間 merge → 承認済み base を作品 branch へ反映 → 全後継タスクの共有 dir 固定・HEAD 整合 → 実作業場で品質ゲート → 別途「元タスク再開の承認」を取り、人間だけが再開する
 - この経路はこの文書の観測時点（2026-10-22 00:33 JST）では未実行。基盤のローカル成功（テスト・check・build が緑）だけでは、止めたままの元カードが直ったことにならない
 - merge 後、承認済み base を作品 branch へ反映し、実際の再開 HEAD に修正が含まれることを `git log` で確認する
-- 代替（repo 外作品 worktree 案）: 例として `/home/hermes/work/play-worktrees/abyss-winder` を新しく掘る。この場合は全後継タスクの workspace / SHA / 成果受渡しを人間が先に統合する計画が必要で、元カードだけは変更しない。主 repo は `feat/work-abyss-winder` を checkout 済みなので、同じ branch を同時 checkout する `git checkout --force` は禁止
+- 代替（repo 外作品 worktree 案）: 例として `~/work/play-worktrees/abyss-winder` を新しく掘る。この場合は全後継タスクの workspace / SHA / 成果受渡しを人間が先に統合する計画が必要で、元カードだけは変更しない。主 repo は `feat/work-abyss-winder` を checkout 済みなので、同じ branch を同時 checkout する `git checkout --force` は禁止
 
 ### 3. cloudbreak 残存の退避（任意。この文書の観測時点では未実行）
 
-必要になったときだけ人間が手で実行する。退避先は repo 外の親 `/home/hermes/work/play-residue-backups` に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先（`$DEST`）にする。一意先には台帳 `ledger.txt` を残す（元と先の realpath・型・所有者・権限・記録時点・直下一覧・hash・symlink の path と参照先・各確認結果・保存先）。移動後・復元後の実在確認はコマンドで実測し、台帳の内容と照合してから台帳に結果を追記する。確認の各行は `&&` で連結せず独立した単純コマンドにする（Bash の AND-list は左側失敗で `set -e` が止まらないため）。
+必要になったときだけ人間が手で実行する。退避先は repo 外の親 `~/work/play-residue-backups` に作り、`mktemp -d` のテンプレートに元タスクの id を入れて一意先（`$DEST`）にする。一意先には台帳 `ledger.txt` を残す（元と先の realpath・型・所有者・権限・記録時点・直下一覧・hash・symlink の path と参照先・各確認結果・保存先）。移動後・復元後の実在確認はコマンドで実測し、台帳の内容と照合してから台帳に結果を追記する。確認の各行は `&&` で連結せず独立した単純コマンドにする（Bash の AND-list は左側失敗で `set -e` が止まらないため）。
 
 ```bash
 set -euo pipefail
-SRC=/home/hermes/work/code/play/works/cloudbreak
-PARENT=/home/hermes/work/play-residue-backups
+SRC=~/work/code/play/works/cloudbreak
+PARENT=~/work/play-residue-backups
 mkdir -p "$PARENT"
 
 # 事前確認（1 つでも失敗・不明ならそこで中止。観測時点の残存は dist/ と node_modules/ の約 142MB）
 stat -c '%F %U:%G %a %n' "$SRC"   # directory の実在・型・所有者・権限
 realpath "$SRC"
 du -sh "$SRC"
-df -T "$PARENT" /home/hermes/work/code/play/works   # 両辺の FS・空き容量・権限
+df -T "$PARENT" ~/work/code/play/works   # 両辺の FS・空き容量・権限
 
 # 一意退避先と台帳
 DEST=$(mktemp -d "$PARENT/t_11da0136-cloudbreak.XXXXXXXX")
@@ -246,8 +246,8 @@ echo "移動後確認 OK: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LEDGER"
 
 ```bash
 set -euo pipefail
-SRC=/home/hermes/work/code/play/works/cloudbreak
-LEDGER=/home/hermes/work/play-residue-backups/t_11da0136-cloudbreak.XXXXXXXX/ledger.txt   # 実在の一意先を指定
+SRC=~/work/code/play/works/cloudbreak
+LEDGER=~/work/play-residue-backups/t_11da0136-cloudbreak.XXXXXXXX/ledger.txt   # 実在の一意先を指定
 DEST=$(dirname "$LEDGER")
 
 # 復元前の確認。元の場所が既に存在したら台帳に中止を記録して終了する（mv は宛先が既存 dir だと
