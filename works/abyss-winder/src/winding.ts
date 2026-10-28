@@ -189,7 +189,7 @@ export interface WindingEngine {
   pointerCancel(event: PointerReleaseInput): void;
   /** 予期しない lostpointercapture。自分で解放した分は main 側で転送しない */
   lostPointercapture(event: PointerReleaseInput): void;
-  /** window blur / 非表示 / resize。aligning・hitstop の予定も破棄する */
+  /** window blur / 非表示 / resize。旧pointerを失効し、aligning・hitstop の予定も破棄する */
   interrupt(timeMs: number): void;
   /** 時間による遷移（aligning→hitstop→closing→settling→idle、cancelled→idle） */
   tick(timeMs: number): void;
@@ -460,8 +460,16 @@ export function createWindingEngine(handlers: WindingHandlers): WindingEngine {
     },
 
     interrupt(timeMs) {
-      // window blur / 非表示 / resize。保留中の閉鎖も破棄する（遅延一括発火しない）
+      // ページ全体の中断では離上通知が欠落しうるため、旧入力の所有権と押下集合を失効する。
+      // 通常の cancel は集合を残し、全指の離上を待つ。
+      activePointerId = null;
+      pointersDown.clear();
+      // 保留中の閉鎖も破棄する（遅延一括発火しない）。
       if (cancellable()) cancel("interrupt", timeMs);
+      else if (state === "cancelled" && cancelPointerFreeAtMs === null) {
+        // 既に多指等で取消中なら通知は繰り返さず、離上待ちだけを解消する。
+        cancelPointerFreeAtMs = timeMs;
+      }
     },
 
     tick(timeMs) {

@@ -400,6 +400,124 @@ test("pointercancel / 予期しない lostpointercapture は一周前の試行�
   assert.ok(lostCase.log.cancelled.includes("lostcapture"));
 });
 
+test("ページ全体の interrupt 後は旧ID7のrelease欠落でも新ID8で再開できる", () => {
+  const { engine, log } = makeEngine();
+  engine.tick(T0);
+  tapTip(engine, G, T0, 7);
+  dragArc(engine, G, START_ANGLE, START_ANGLE + Math.PI, T0 + 50, T0 + 550, 7);
+  engine.interrupt(T0 + 560);
+  assert.equal(engine.snapshot().state, "cancelled");
+  assert.deepEqual(log.cancelled, ["interrupt"]);
+  engine.tick(T0 + 739);
+  assert.equal(engine.snapshot().state, "cancelled", "戻り演出の180msは維持する");
+  engine.tick(T0 + 740);
+  assert.equal(engine.snapshot().state, "idle", "旧IDの離上通知には依存しない");
+
+  tapTip(engine, G, T0 + 750, 8);
+  assert.equal(engine.snapshot().state, "winding");
+  assert.equal(engine.snapshot().netAngle, 0, "中断前の半周は再利用しない");
+  // 遅れて届いた旧IDの入力も新しい所有権を壊さない。
+  engine.pointerUp({ pointerId: 7, timeMs: T0 + 760 });
+  engine.pointerCancel({ pointerId: 7, timeMs: T0 + 770 });
+  engine.lostPointercapture({ pointerId: 7, timeMs: T0 + 780 });
+  dragFullLap(engine, G, T0 + 800, T0 + 2800, 8);
+  assert.equal(log.grabs, 2);
+  assert.equal(log.accepted.length, 1);
+  engine.tick(engine.snapshot().closeAtMs!);
+  assert.equal(engine.snapshot().closedRingCount, 1);
+});
+
+test("通常の多指キャンセルは全指のreleaseと180msを待つ", () => {
+  const { engine, log } = makeEngine();
+  engine.tick(T0);
+  tapTip(engine, G, T0, 7);
+  tapTip(engine, G, T0 + 10, 8);
+  engine.tick(T0 + 1000);
+  assert.equal(engine.snapshot().state, "cancelled");
+  engine.pointerUp({ pointerId: 7, timeMs: T0 + 1010 });
+  engine.tick(T0 + 2000);
+  tapTip(engine, G, T0 + 2010, 9);
+  assert.equal(engine.snapshot().state, "cancelled", "1指残った状態の新規押下も再開しない");
+  assert.equal(log.grabs, 1);
+  engine.pointerCancel({ pointerId: 8, timeMs: T0 + 2020 });
+  engine.tick(T0 + 3000);
+  assert.equal(engine.snapshot().state, "cancelled", "取消中に加わった指も離上待ちの対象");
+  engine.pointerUp({ pointerId: 9, timeMs: T0 + 3010 });
+  engine.tick(T0 + 3189);
+  assert.equal(engine.snapshot().state, "cancelled");
+  engine.tick(T0 + 3190);
+  assert.equal(engine.snapshot().state, "idle");
+  tapTip(engine, G, T0 + 3200, 10);
+  assert.equal(engine.snapshot().state, "winding");
+  assert.equal(log.grabs, 2);
+  assert.deepEqual(log.cancelled, ["foreign-pointer"]);
+});
+
+test("多指キャンセル中の interrupt も旧release待ちを失効し重複取消しない", () => {
+  const { engine, log } = makeEngine();
+  engine.tick(T0);
+  tapTip(engine, G, T0, 7);
+  tapTip(engine, G, T0 + 10, 8);
+  engine.interrupt(T0 + 20);
+  engine.interrupt(T0 + 21); // blur / hidden 等の重複でも復帰待ちを延長しない。
+  engine.tick(T0 + 199);
+  assert.equal(engine.snapshot().state, "cancelled");
+  engine.tick(T0 + 200);
+  assert.equal(engine.snapshot().state, "idle");
+  assert.deepEqual(log.cancelled, ["foreign-pointer"]);
+  tapTip(engine, G, T0 + 210, 9);
+  assert.equal(engine.snapshot().state, "winding");
+  // 旧押下集合が残っていないことを、次の通常取消の復帰でも確認する。
+  engine.pointerUp({ pointerId: 9, timeMs: T0 + 220 });
+  engine.tick(T0 + 400);
+  assert.equal(engine.snapshot().state, "idle");
+});
+
+test("hitstop の interrupt は未commitの一周を取り消し旧releaseなしで復帰する", () => {
+  const { engine, log } = makeEngine();
+  engine.tick(T0);
+  tapTip(engine, G, T0, 7);
+  dragFullLap(engine, G, T0 + 50, T0 + 2050, 7);
+  const timeline = engine.snapshot();
+  engine.tick(timeline.freezeAtMs!);
+  assert.equal(engine.snapshot().state, "hitstop");
+  engine.interrupt(timeline.closeAtMs! - 1);
+  assert.equal(engine.snapshot().state, "cancelled");
+  assert.equal(engine.snapshot().closeAtMs, null);
+  engine.tick(timeline.closeAtMs! + 179);
+  assert.equal(engine.snapshot().state, "idle");
+  assert.equal(log.accepted.length, 1);
+  assert.equal(log.committed.length, 0);
+  assert.equal(engine.snapshot().closedRingCount, 0);
+  assert.deepEqual(log.cancelled, ["interrupt"]);
+});
+
+test("commit後の closing / settling を interrupt しても完了輪は取り消さない", () => {
+  for (const offset of [0, RING_CLOSE_MS]) {
+    const { engine, log } = makeEngine();
+    engine.tick(T0);
+    tapTip(engine, G, T0, 7);
+    dragFullLap(engine, G, T0 + 50, T0 + 2050, 7);
+    const timeline = engine.snapshot();
+    engine.tick(timeline.closeAtMs! + offset);
+    const before = engine.snapshot();
+    assert.equal(before.state, offset === 0 ? "closing" : "settling");
+    engine.interrupt(timeline.closeAtMs! + offset + 1);
+    assert.equal(engine.snapshot().state, before.state);
+    assert.equal(engine.snapshot().committedToken, before.committedToken);
+    assert.deepEqual(engine.snapshot().ringStartAngles, [START_ANGLE]);
+    assert.equal(log.cancelled.length, 0);
+    assert.equal(log.committed.length, 1);
+    engine.tick(timeline.closeAtMs! + SETTLE_MS);
+    tapTip(engine, G, timeline.closeAtMs! + SETTLE_MS + 10, 8);
+    assert.equal(engine.snapshot().state, "winding");
+    engine.pointerUp({ pointerId: 8, timeMs: timeline.closeAtMs! + SETTLE_MS + 20 });
+    engine.tick(timeline.closeAtMs! + SETTLE_MS + 200);
+    assert.equal(engine.snapshot().state, "idle", "完了後も旧ID7の離上待ちを残さない");
+    assert.equal(engine.snapshot().closedRingCount, 1);
+  }
+});
+
 test("blur / 非表示 / resize は winding・aligning・hitstop の予定を破棄する", () => {
   const windingCase = makeEngine();
   windingCase.engine.tick(T0);
@@ -416,9 +534,11 @@ test("blur / 非表示 / resize は winding・aligning・hitstop の予定を破
   const after = aligningCase.engine.snapshot();
   assert.equal(after.state, "cancelled", "aligning 中の interrupt は予定を破棄");
   assert.equal(aligningCase.log.committed.length, 0, "破棄された予定は commit しない");
-  // 破棄後は freezeAtMs を過ぎても hitstop に進まない
+  // 破棄後は freezeAtMs を過ぎても予約を発火せず、旧releaseなしで idle に戻る。
   aligningCase.engine.tick(freezeAt + EIGHTH_MS * 3);
-  assert.equal(aligningCase.engine.snapshot().state, "cancelled");
+  assert.equal(aligningCase.engine.snapshot().state, "idle");
+  assert.equal(aligningCase.log.committed.length, 0);
+  assert.equal(aligningCase.engine.snapshot().closedRingCount, 0);
 });
 
 // ============================================================
