@@ -1,8 +1,7 @@
 // ============================================================
 // main.ts ─ 状態機械・ポインタ入力・描画ループ（p5 インスタンスモード）
-// 雛形: 押す / なぞると、位置で音程が決まるベルが鳴り、波紋が広がる。作品に合わせて書き換える。
-//
-// 状態機械（正本は docs/architecture.md）: intro →（最初の押下）→ idle ⇄ pressing
+// 状態の正本は winding.ts（純粋状態機械）、描画は renderer.ts。このファイルは配線だけを持つ。
+// 正本: docs/architecture.md §2〜§7。
 // 開発用クエリ: ?mute（無音）/ ?debug（診断オーバーレイ + window.__art の値を表示）
 // ============================================================
 
@@ -11,38 +10,23 @@ import "./style.css";
 
 import { createAudioEngine } from "./audio/engine";
 import { createFrameCounter, installArtHook } from "./art-hook";
-import { noteForPosition } from "./music";
+import { BASE_MIDI } from "./music";
 import { QualityController } from "./quality";
+import { computeLayout, createRendererState, drawScene, type Layout, type RendererState } from "./renderer";
 import {
-  DRAG_TRIGGER_DISTANCE_PX,
-  PALETTE_BACKGROUND,
-  PALETTE_DEGREE_COLORS,
-  RIPPLE_CAP_STEPS,
-  RIPPLE_LIFE_MS,
-  RIPPLE_MAX_RADIUS_RATIO,
+  CONTACT_MIN_INTERVAL_MS,
+  CONTACT_RIPPLE_STEPS,
+  PARTICLE_COUNT_STEPS,
 } from "./tuning";
-
-type State = "intro" | "idle" | "pressing";
-
-interface Ripple {
-  x: number;
-  y: number;
-  color: string;
-  bornMs: number;
-  strength: number;
-}
-
-interface PointerTrack {
-  lastTriggerX: number;
-  lastTriggerY: number;
-}
+import { createWindingEngine } from "./winding";
 
 // p5 v2 の FES は偽陽性で fps を落とすため必ず止める
 P5.disableFriendlyErrors = true;
 
 const audio = createAudioEngine();
-const quality = new QualityController(RIPPLE_CAP_STEPS.length);
+const quality = new QualityController(PARTICLE_COUNT_STEPS.length);
 const frameCounter = createFrameCounter();
+const rendererState: RendererState = createRendererState();
 
 const hostEl = document.querySelector<HTMLDivElement>("#p5-host")!;
 const gateEl = document.querySelector<HTMLDivElement>("#gate")!;
@@ -50,43 +34,65 @@ const debugOverlayEl = document.querySelector<HTMLPreElement>("#debug-overlay")!
 const isDebugMode = new URLSearchParams(location.search).has("debug");
 if (isDebugMode) debugOverlayEl.hidden = false;
 
-let state: State = "intro";
-let ripples: Ripple[] = [];
-let energy = 0;
 let lastAmp = 0;
+let energy = 0;
 let lastError = "";
-const pointers = new Map<number, PointerTrack>();
+let introHiddenAtMs: number | null = null;
+/** 円外接触音の間引き（§8: 過密発音を 50ms 以上間引く） */
+let lastContactNoteMs = -Infinity;
+
+const engine = createWindingEngine({
+  onGrab(x, y) {
+    noteAt(x, y, 0.8);
+  },
+  onContact(x, y) {
+    rendererState.spawnContactRipple(x, y, performance.now());
+    const nowMs = performance.now();
+    if (nowMs - lastContactNoteMs >= CONTACT_MIN_INTERVAL_MS) {
+      lastContactNoteMs = nowMs;
+      noteAt(x, y, 0.4);
+    }
+  },
+  onAccepted() {
+    // 閉鎖音の予約は音響カード（実装2）の契約。実装1は視覚の論理時計だけを公開する
+  },
+  onCommitted() {
+    // commit に紐づく音も実装2
+  },
+  onCancelled() {
+    // 罰の大音量なし。摩擦・予約音の取消は実装2
+  },
+});
+
+/** 接触音（局所音）。音程は位置で変えない（雛形の横移動音階を持ち込まない） */
+function noteAt(x: number, y: number, velocity: number): void {
+  audio.note({
+    x: x / window.innerWidth,
+    y: y / window.innerHeight,
+    midi: BASE_MIDI,
+    velocity,
+  });
+}
 
 installArtHook({
   getAmp: () => lastAmp,
-  getState: () => state,
+  getState: () => engine.snapshot().state,
   getFrameStats: () => frameCounter.stats(),
 });
 
-function trigger(x: number, y: number, strength: number): void {
-  const { midi, degree } = noteForPosition(x / window.innerWidth);
-  audio.note({ x: x / window.innerWidth, y: y / window.innerHeight, midi, velocity: strength });
-  const cap = RIPPLE_CAP_STEPS[quality.getLevel()];
-  if (ripples.length >= cap) ripples.shift();
-  ripples.push({ x, y, color: PALETTE_DEGREE_COLORS[degree % PALETTE_DEGREE_COLORS.length], bornMs: performance.now(), strength });
-  energy = Math.min(1, energy + 0.15);
+function currentGeometry(): Layout {
+  return computeLayout(window.innerWidth, window.innerHeight);
 }
 
-function renderDebugOverlay(): void {
-  const stats = frameCounter.stats();
-  const snapshot: Record<string, string | number | boolean> = {
-    state,
-    amp: Math.round(lastAmp * 1000) / 1000,
-    frames: stats.frames,
-    meanDrawMs: Math.round(stats.meanDrawMs * 100) / 100,
-    qualityLevel: quality.getLevel(),
-    ripples: ripples.length,
-    lastError,
-    ...audio.getDiagnostics(),
-  };
-  debugOverlayEl.textContent = Object.entries(snapshot)
-    .map(([key, value]) => `${key}: ${value}`)
-    .join("\n");
+function exitIntro(x: number, y: number): void {
+  if (gateEl.classList.contains("is-hidden")) return;
+  gateEl.classList.add("is-hidden");
+  introHiddenAtMs = performance.now();
+  // resume() の解決を待たない。音の成否に関わらず描画は続ける
+  audio.start().catch((error: unknown) => {
+    lastError = error instanceof Error ? error.message : String(error);
+  });
+  noteAt(x, y, 0.5);
 }
 
 new P5((p: P5) => {
@@ -96,81 +102,132 @@ new P5((p: P5) => {
     // p5 v2 の既知の制約: pixelDensity は createCanvas の後に呼ぶ
     p.pixelDensity(1);
 
-    window.addEventListener("resize", () => p.resizeCanvas(window.innerWidth, window.innerHeight), { passive: true });
-    window.addEventListener("contextmenu", (event) => event.preventDefault());
-
-    window.addEventListener(
-      "pointerdown",
-      (event: PointerEvent) => {
-        if (state === "intro") {
-          gateEl.classList.add("is-hidden");
-          // resume() の解決を待たない。音の成否に関わらず描画は続ける
-          audio.start().catch((error: unknown) => {
-            lastError = error instanceof Error ? error.message : String(error);
-          });
+    window.addEventListener("pointerdown", (event: PointerEvent) => {
+      const geometry = currentGeometry();
+      if (engine.snapshot().state === "intro") {
+        // 中央円盤内の押下だけが intro を抜ける（判定は engine。抜けた押下は巻き取りに流用されない）
+        engine.pointerDown(
+          { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timeMs: performance.now() },
+          geometry,
+        );
+        if (engine.snapshot().state !== "intro") exitIntro(event.clientX, event.clientY);
+        return;
+      }
+      engine.pointerDown(
+        { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timeMs: performance.now() },
+        geometry,
+      );
+      // 索端を掴めたら pointer capture を試みる（合成イベントでは失敗しうる。期待される例外だけを処理）
+      if (engine.snapshot().state === "winding") {
+        try {
+          canvas.elt.setPointerCapture(event.pointerId);
+        } catch {
+          // capture できなくても window リスナーで所有権判定は守る
         }
-        state = "pressing";
-        pointers.set(event.pointerId, { lastTriggerX: event.clientX, lastTriggerY: event.clientY });
-        trigger(event.clientX, event.clientY, 1);
-      },
-      { passive: true },
-    );
+      }
+    }, { passive: true });
 
-    window.addEventListener(
-      "pointermove",
-      (event: PointerEvent) => {
-        const track = pointers.get(event.pointerId);
-        if (!track) return;
-        const distance = Math.hypot(event.clientX - track.lastTriggerX, event.clientY - track.lastTriggerY);
-        if (distance < DRAG_TRIGGER_DISTANCE_PX) return;
-        track.lastTriggerX = event.clientX;
-        track.lastTriggerY = event.clientY;
-        trigger(event.clientX, event.clientY, 0.6);
-      },
-      { passive: true },
-    );
+    window.addEventListener("pointermove", (event: PointerEvent) => {
+      const geometry = currentGeometry();
+      const timeMs = performance.now();
+      const coalesced =
+        typeof event.getCoalescedEvents === "function"
+          ? event.getCoalescedEvents().map((item) => ({
+              x: item.clientX,
+              y: item.clientY,
+              timeMs: item.timeStamp > 0 ? item.timeStamp : timeMs,
+            }))
+          : undefined;
+      engine.pointerMove(
+        { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timeMs },
+        geometry,
+        coalesced,
+      );
+    }, { passive: true });
 
     const release = (event: PointerEvent): void => {
-      pointers.delete(event.pointerId);
-      if (pointers.size === 0 && state === "pressing") state = "idle";
+      engine.pointerUp({ pointerId: event.pointerId, timeMs: performance.now() });
     };
     window.addEventListener("pointerup", release, { passive: true });
-    window.addEventListener("pointercancel", release, { passive: true });
+    window.addEventListener("pointercancel", (event: PointerEvent) => {
+      engine.pointerCancel({ pointerId: event.pointerId, timeMs: performance.now() });
+    }, { passive: true });
+    // 自分で解放した分は up 済みなので engine 側の所有権照合で無視される
+    window.addEventListener("lostpointercapture", (event: PointerEvent) => {
+      engine.lostPointercapture({ pointerId: event.pointerId, timeMs: performance.now() });
+    }, { passive: true });
+
+    window.addEventListener("blur", () => engine.interrupt(performance.now()));
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) engine.interrupt(performance.now());
+    });
+    window.addEventListener(
+      "resize",
+      () => {
+        // resize は幾何が変わるため未完の試行を破棄する（architecture.md §4）
+        engine.interrupt(performance.now());
+        p.resizeCanvas(window.innerWidth, window.innerHeight);
+      },
+      { passive: true },
+    );
+    window.addEventListener("contextmenu", (event) => event.preventDefault());
   };
 
   p.draw = () => {
     const drawStartMs = performance.now();
-    const nowMs = drawStartMs;
-    quality.recordFrame(Math.min(p.deltaTime || 16.7, 100));
+    const geometry = computeLayout(p.width, p.height);
 
+    engine.tick(drawStartMs);
     lastAmp = audio.getAmp(); // analyser の読み出しは 1 フレーム 1 回
     energy = Math.max(0, energy - (p.deltaTime / 1000) * 0.4);
     audio.setEnergy(energy);
+    quality.recordFrame(Math.min(p.deltaTime || 16.7, 100));
 
+    const snapshot = engine.snapshot();
     const ctx = p.drawingContext;
     ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = PALETTE_BACKGROUND;
-    ctx.globalAlpha = 0.28; // 薄く塗り重ねて残像を残す
-    ctx.fillRect(0, 0, p.width, p.height);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "lighter";
-
-    const maxRadius = Math.min(p.width, p.height) * RIPPLE_MAX_RADIUS_RATIO;
-    ripples = ripples.filter((ripple) => nowMs - ripple.bornMs < RIPPLE_LIFE_MS);
-    for (const ripple of ripples) {
-      const progress = (nowMs - ripple.bornMs) / RIPPLE_LIFE_MS;
-      const eased = 1 - Math.pow(1 - progress, 3);
-      ctx.strokeStyle = ripple.color;
-      ctx.globalAlpha = (1 - progress) * (0.4 + 0.6 * ripple.strength);
-      ctx.lineWidth = 2 + 6 * (1 - progress);
-      ctx.beginPath();
-      ctx.arc(ripple.x, ripple.y, maxRadius * eased * (0.6 + 0.4 * ripple.strength), 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    drawScene(ctx, rendererState, {
+      snapshot,
+      nowMs: drawStartMs,
+      width: p.width,
+      height: p.height,
+      qualityLevel: quality.getLevel(),
+      amp: lastAmp,
+      introHiddenAtMs,
+    });
     ctx.restore();
 
+    // 接触水紋の上限（品質の段ごと）
+    const rippleCap = CONTACT_RIPPLE_STEPS[Math.min(quality.getLevel(), CONTACT_RIPPLE_STEPS.length - 1)];
+    if (rendererState.contactRipples.length > rippleCap) {
+      rendererState.contactRipples.splice(0, rendererState.contactRipples.length - rippleCap);
+    }
+
     frameCounter.record(performance.now() - drawStartMs);
-    if (isDebugMode && p.frameCount % 6 === 0) renderDebugOverlay();
+    if (isDebugMode && p.frameCount % 6 === 0) renderDebugOverlay(snapshot.state, geometry);
   };
 });
+
+function renderDebugOverlay(state: string, geometry: Layout): void {
+  const stats = frameCounter.stats();
+  const snapshot = engine.snapshot();
+  const overlay: Record<string, string | number | boolean> = {
+    state,
+    amp: Math.round(lastAmp * 1000) / 1000,
+    frames: stats.frames,
+    meanDrawMs: Math.round(stats.meanDrawMs * 100) / 100,
+    qualityLevel: quality.getLevel(),
+    netAngle: Math.round(snapshot.netAngle * 1000) / 1000,
+    tipAngle: Math.round(snapshot.tipAngle * 1000) / 1000,
+    rings: snapshot.closedRingCount,
+    freezeAtMs: snapshot.freezeAtMs ?? "",
+    closeAtMs: snapshot.closeAtMs ?? "",
+    sceneTimeMs: Math.round(snapshot.sceneTimeMs),
+    R: Math.round(geometry.radius),
+    lastError,
+    ...audio.getDiagnostics(),
+  };
+  debugOverlayEl.textContent = Object.entries(overlay)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n");
+}
