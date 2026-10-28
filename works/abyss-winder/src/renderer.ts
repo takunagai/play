@@ -607,7 +607,7 @@ export function drawScene(
   ctx.globalAlpha = 1;
 
   // ---- 誘導文（索端の誘い。最初の閉鎖以降は二度と出ない） ----
-  const guideVisible = snapshot.state === "idle" && snapshot.closedRingCount === 0;
+  const guideVisible = (snapshot.state === "intro" || snapshot.state === "idle") && snapshot.closedRingCount === 0;
   const guideTarget = guideVisible ? 1 : 0;
   const dtMs = 16.7;
   const guideRate = dtMs / GUIDE_FADE_MS;

@@ -53,19 +53,34 @@ body {
 }
 
 #gate {
+  --title-size: 40px;
+  --title-top: 68px;
+  --start-size: 14px;
+  --start-gap: 26px;
   position: fixed;
   inset: 0;
   z-index: 10;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px;
+  justify-content: flex-start;
+  gap: var(--start-gap);
+  padding: max(var(--title-top), env(safe-area-inset-top)) 14px 0;
   text-align: center;
-  background: rgba(7, 7, 13, 0.35);
-  transition: opacity 0.5s ease;
+  /* 窓・索端・方向案内は開始前から同じ明るさで見せる。 */
+  background: transparent;
+  transition: opacity 0.2s ease;
   cursor: pointer;
+}
+
+/* Canvas と同じ min(width, height) < 480 の狭幅判定。 */
+@media (width < 480px), (height < 480px) {
+  #gate {
+    --title-size: 26px;
+    --title-top: 70px;
+    --start-size: 13px;
+    --start-gap: 21px;
+  }
 }
 
 #gate.is-hidden {
@@ -75,17 +90,19 @@ body {
 
 #gate-title {
   margin: 0;
-  font-size: clamp(2.25rem, 9vw, 4.5rem);
+  font-size: var(--title-size);
   font-weight: bold;
-  line-height: 1.1;
-  animation: gate-rise 0.9s ease both;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  color: #d6e2ea;
 }
 
 #gate-text {
   margin: 0;
-  font-size: clamp(1rem, 3.6vw, 1.25rem);
-  opacity: 0.85;
-  animation: gate-rise 0.9s 0.3s ease both;
+  font-size: var(--start-size);
+  line-height: 1;
+  white-space: nowrap;
+  color: #a9bac7;
 }
 
 #debug-overlay {
@@ -108,22 +125,4 @@ body {
 
 #debug-overlay[hidden] {
   display: none;
-}
-
-@keyframes gate-rise {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #gate-title,
-  #gate-text {
-    animation: none;
-  }
 }
