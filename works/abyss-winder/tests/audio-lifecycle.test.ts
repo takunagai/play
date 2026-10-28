@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test, type TestContext } from "node:test";
-import { SPEED_MAX_RAD_S } from "../src/tuning.ts";
+import { EIGHTH_MS, SPEED_MAX_RAD_S } from "../src/tuning.ts";
 
 // 製品の bundler 向け拡張子省略を Node のテスト内だけで解決する。
 const hooks = registerHooks({
@@ -213,6 +213,50 @@ for (const [speed, duration] of [[0, 0.06], [SPEED_MAX_RAD_S, 0.02]]) {
     context.advance(t0 + duration + 0.021);
     assert.equal(engine.getDiagnostics().voices, 0);
     for (const source of sources) assert.equal(source.stopCalls.length, 1);
+  });
+}
+
+for (const [startIndex, expected] of [
+  [0, [81, 79, 78, 76, 74, 72, 71]],
+  [7, [69, 67, 66, 64, 62, 60, 59]],
+  [14, [57, 55, 54, 52, 50, 48, 47, 45]],
+] as const) {
+  test(`拍爪のAドリアン下降は MIDI ${expected[0]} から ${expected.at(-1)} まで相対度数を守る`, async (t) => {
+    const { engine, context } = await setup(t);
+    const originMs = 1000;
+    let nowMs = originMs - 20;
+    t.mock.method(performance, "now", () => nowMs);
+    const cue = { gestureId: 1, progress: 0, speed: 0, accuracy: 1, beatOriginMs: originMs };
+    engine.winding({ ...cue, phase: "start", atMs: nowMs });
+    const midiNotes: number[] = [];
+    // 最下端の次の2拍まで進め、折り返さず無音程の爪になることも確認する。
+    for (let beat = 0; beat < 24; beat++) {
+      nowMs = originMs + beat * EIGHTH_MS - 20;
+      context.advance(10 + beat * EIGHTH_MS / 1000);
+      const sourceStart = context.sources.length;
+      engine.winding({ ...cue, phase: "move", atMs: nowMs });
+      const sources = context.sources.slice(sourceStart);
+      assert.equal(sources.length, beat < 22 ? 4 : 3);
+      const fundamental = sources[0];
+      near(fundamental.startAt, 10.02 + beat * EIGHTH_MS / 1000);
+      near(fundamental.stopAt - fundamental.startAt, 0.08);
+      near(sources[1].frequency.value / fundamental.frequency.value, 2.37);
+      if (beat < 22) {
+        near(sources[2].frequency.value / fundamental.frequency.value, 3.61);
+        const midi = Math.round(69 + 12 * Math.log2(fundamental.frequency.value / 440));
+        near(fundamental.frequency.value, 440 * 2 ** ((midi - 69) / 12));
+        midiNotes.push(midi);
+      } else {
+        near(fundamental.frequency.value, 1900);
+      }
+    }
+    assert.equal(engine.getDiagnostics().descentBeats, 22);
+    assert.deepEqual(midiNotes.slice(startIndex, startIndex + expected.length), expected);
+    for (let index = 1; index < midiNotes.length; index++) {
+      assert.ok(midiNotes[index] < midiNotes[index - 1], "各拍で厳密に下降し、重複・折り返しをしない");
+    }
+    // 絶対音名 A/B/C/D/E/F#/G のみ。下のオクターブは BASE_MIDI 未満で剰余が負になる。
+    for (const midi of midiNotes) assert.ok([9, 11, 0, 2, 4, 6, 7].includes(midi % 12));
   });
 }
 

@@ -11,7 +11,7 @@
 // ============================================================
 
 import type { AudioEngine, ClosureTimeline, NoteEvent, WindingCue } from "./engine";
-import { SCALES, midiToFrequency } from "../music";
+import { BASE_MIDI, SCALES, midiToFrequency } from "../music";
 import { planClosureTimes } from "../winding";
 import { EIGHTH_MS, SPEED_MAX_RAD_S } from "../tuning";
 
@@ -71,7 +71,8 @@ const DESCENT: readonly number[] = (() => {
   const steps: readonly number[] = SCALES["ドリアン"];
   const out: number[] = [];
   for (let midi = DESCENT_TOP_MIDI; midi >= DESCENT_BOTTOM_MIDI; midi--) {
-    if (steps.includes(((midi % 12) + 12) % 12)) out.push(midi);
+    const degree = (((midi - BASE_MIDI) % 12) + 12) % 12;
+    if (steps.includes(degree)) out.push(midi);
   }
   return out;
 })();
