@@ -4,89 +4,121 @@
 
 ## 現在の段階
 
-- 完了: 円周巻き取りの状態機械（`src/winding.ts`・純粋で fake時計テスト可）、海底窓の描画（`src/renderer.ts`）、入力配線（`src/main.ts`）、デザイン確定値の転記（`src/tuning.ts`）、円周判定の回帰テスト（`tests/winding.test.ts`）、音響同期（`src/audio/engine.ts` の型付き契約と `src/audio/synth-engine.ts` のアコースティック音源）、実画面からのサムネイル置換。
-- 実装済みの操作: 中央タップで導入を抜け、垂れた索端（ヒット半径28px）をつかみ、時計回りに途切れず一周。巻いている間は濡れた索の摩擦と、8分拍ごとにドリアンを一段ずつ下げる金属の爪（速さで爪の長さが変わり、拍は一定）が鳴る。途中で離す・円を外す・逆走する・別の指へ渡すと未完分だけ静かに戻り、鳴っている摩擦と未発音の閉鎖予約も消える。有効一周で最後の目盛りが合い、索・泡・摩擦が0.14秒止まり、次の8分拍に金属クリック・木の胴鳴り・青いベルとともに輪が一段閉じる。閉じた輪と巻き索は蓄積し、次の索端は π/6 ずつずれて垂れる。
-- 残っているもの: 中央案内 copy の writer 確定（雛形文言の暫定。確定後は `index.html` の1行差し替え）、実マウス/実タッチでの連続一周・多pointer・140ms同期の独立検証（検証担当の領分）。
-- `public/thumbnail.webp` は実画面（2輪閉鎖の蓄積・閉鎖輪の発光ピーク付近）から撮影した 1200x630。生成画像は0枚（`generatedImages` は空）。
+- 完了: 円周状態機械（`src/winding.ts`）、海底窓の描画（`src/renderer.ts`）、入力・音響の配線（`src/main.ts`）、確定幾何（`src/tuning.ts`）、Web Audioの型付き契約と音源、実画面サムネイルを実装。状態機械の純粋分離は統合担当が妥当な例外として採用済みで、mainへ再結合しない。
+- 完了: 唯一の修正ラウンドR1のA〜Fで音源寿命と閉鎖tokenの解放・A相対ドリアン・中断後の旧pointer失効・停止中の索保持と次索長・粒子単位と250ms拍位相・導入階層と確定copy「窓に触れて、はじめる」を反映。Gは本書・concept・architectureの記録整合のみ。
+- 完了: Gで既存回帰62件、直接型検査・作品build・`pnpm check`（5作品）・一般verifyの5項目を実行し成功。下記の自動検証と実機検証を区別する。
+- 実装したが未検証: 実機の指遮蔽・多指・実タブ切替、物理出力での140ms音視覚同期・聴感、6輪超・12周・長時間継続、計測条件以外の高さ。合成入力やfake時計を実機成功へ読み替えない。
+- 未着手: R1最終同SHAによる後続独立テスト・コード/見た目の再判定、統合採否、人間による公開判断。初回独立判定は別途実施済みで、R1合格ではない。PRはdraftを維持する。
 
-仕様は [concept](docs/concept.md) と [architecture](docs/architecture.md)、素材の決定は [image-order](docs/image-order.md)、経緯は [process-log](docs/process-log.md) を参照。
+`public/thumbnail.webp` は実画面（2輪閉鎖の蓄積・閉鎖輪の発光ピーク付近）から撮影した1200×630。生成画像0枚（`generatedImages=[]`）。仕様は [concept](docs/concept.md) と [architecture](docs/architecture.md)、素材方針は [image-order](docs/image-order.md)、初回段階の履歴は [process-log](docs/process-log.md) を参照。現状の正本は本書とarchitecture。
 
 ## cloneとセットアップ
 
-前提: Git、Node **26.5.1**（リポジトリの `.node-version`）、pnpm **11.21.0**。指定バージョンを用意し、`node --version` / `pnpm --version` で確認する。
+前提: Git、Node **26.5.1**（`.node-version`）、pnpm **11.21.0**（ルートpackageManager）。指定バージョンを用意して確認する。古いNodeがPATH上で先行していないことにも注意する。
 
 ```bash
 git clone https://github.com/takunagai/play.git
 cd play
 git switch feat/work-abyss-winder
+node --version
+pnpm --version
 pnpm install --frozen-lockfile
+# renderer testとverifyの初回だけ、既存Playwrightに対応するChromiumを導入
+pnpm exec playwright install chromium --only-shell
 ```
 
-作品のlockfileは `works/abyss-winder/pnpm-lock.yaml`。ルートのlockfileを更新しない。依存は既存テンプレートの p5 / Vite / TypeScript のみ。
+作品lockfileは `works/abyss-winder/pnpm-lock.yaml`。ルートからのinstallはworkspaceも対象とし、既存pinと各lockfileを維持する。ルートlockfileを更新しない。作品依存は既存のp5 / Vite / TypeScriptのみ。依存の追加・更新はしない。
 
-環境変数・APIキー・サーバー・DBは不要。`.env` / `.dev.vars` は作らない。外部CDNや音声ファイルのダウンロードも不要。自動ブラウザ検証に別のChromiumを用いるときだけ、ルートの規約に従い `VERIFY_CHROMIUM_PATH` を任意設定する。
+**作品の環境変数・APIキー・バックエンド・DBは不要。** `.env` / `.dev.vars` は作らない。実行時の外部CDN・音声ファイルのダウンロードも不要。自動検証で別のChromiumを使う場合だけ `VERIFY_CHROMIUM_PATH` を任意指定できる。通常の鑑賞・操作には不要。
 
 ## 起動・操作
 
-リポジトリのルートから:
+以降はすべてリポジトリのルートから実行する。
 
 ```bash
 pnpm --dir works/abyss-winder dev --host 127.0.0.1
 ```
 
-表示されたローカルURLを開き、中央をタップして始める。垂れた索端をつかみ、時計回りに一周。途中で離す・円を外す・逆走する・別の指へ渡すと未完分だけ戻る。有効一周で最後の目盛りが合い、0.14秒の停止の後、次拍に輪が一段閉じる。閉じた輪と巻き索は残り、次の索端は少し離れて垂れる。
+表示されたローカルURLを開く。導入は上部の題名（狭幅26px / 通常40px）、1行の開始案内「窓に触れて、はじめる」（13px / 14px）、窓下の索端案内を分離し、暗幕は置かない。中央の窓をタップすると導入が200msで退く。その押下は巻き取りに流用せず、指を離してから索端をつかむ。
+
+端のヒット半径は28px。時計回りに途切れず一周すると全周索と垂れ索を保ち、最終目盛りで論理140ms停止後、次の8分拍に青輪が一段閉じる。閉鎖開始から250msで輪が閉じ、900msで次の操作へ戻る。閉じた輪と巻き索は残り、次端はπ/6ずつ移動する。遅く正確な一周ほど次索の可視弧長が長く、末端は画面外へ沈む。
+
+途中で離す・帯域を外す・逆走する・別の指を加えると未完分だけ戻る。通常の多指取消は全指のreleaseと180msを待つ。blur / 非表示 / resizeによる全体中断は旧pointerを失効し、欠落releaseで復帰が詰まらないようにする。commit前の予定は破棄し、完了済み輪は残す。
+
+巻き中は摩擦と250ms間隔のA相対ドリアン下降（A5→A2の22音）。速く巻くと爪は短くなるが、拍は速くならない。下端後は無音程の爪と摩擦のみ。閉鎖は金属クリック・木胴・青いベルを同じ予定時刻に鳴らす。
 
 - `?mute`: 無音で視覚を確認する。
-- `?debug`: 状態・実測振幅・描画時間を表示する。
-- 音声解錠にはタップ後に指を離す。音が無くても描画は止めない。
+- `?debug`: 状態・実測振幅・描画時間・音源診断を表示する。
+- 音声解錠にはタップ後に指を離す。resume完了を待たず描画を続ける。
+- dev/previewを終えたら起動したターミナルでCtrl+C。自分のサーバーを残さない。
 
-## 型チェック・テスト・ビルド
+## 型チェック・既存テスト・ビルド
 
 ```bash
-# 作品の型検査
 pnpm --dir works/abyss-winder exec tsc --noEmit
-# 作品の型検査とビルド（dist/を生成）
-pnpm --dir works/abyss-winder build
-# 円周判定・共通時刻契約の作品固有回帰テスト
+# fake時計の円周・所有権・token・共通時刻の回帰（30件）
 node --experimental-strip-types --test works/abyss-winder/tests/winding.test.ts
+# 模擬Web Audio境界を使う実音源コードの寿命・解放・音階回帰（12件）
+node --experimental-strip-types --test works/abyss-winder/tests/audio-lifecycle.test.ts
+# 実Canvasの索保持・次索長・粒子・拍位相（20件、既存Playwright/Vite使用）
+node --experimental-strip-types --test works/abyss-winder/tests/renderer.test.ts
+# 全62件をまとめて1回実行する場合
+node --experimental-strip-types --test works/abyss-winder/tests/winding.test.ts works/abyss-winder/tests/audio-lifecycle.test.ts works/abyss-winder/tests/renderer.test.ts
+# tscとVite build（作品dist/を生成）
+pnpm --dir works/abyss-winder build
 # 全作品のメタデータ・ビルド・サムネイル・一覧リンク
 pnpm check
-# 既存の基盤回帰（Nodeテスト）
-node --test scripts/tests/work-json.test.mjs
-# 既存作品の回帰
-node --experimental-strip-types --test works/shatter-spire/tests/*.test.ts
-```
-
-作品固有の `test` / `lint`、rootの `test` / `lint` / `typecheck` scriptは現段階では未定義（実行時は `ERR_PNPM_NO_SCRIPT`）。上の直接実行による型チェックと既存テストを、それらの成功に読み替えない。円周判定と時刻境界のテストは `tests/winding.test.ts`（25件・fake時計）に実装済み。
-
-既知の範囲外の失敗: 新作追加後の基盤回帰は75 pass / 1 fail。`scripts/tests/work-json.test.mjs:841-847` が作品名を既存4作品へ固定しており、正しく列挙された `abyss-winder` が期待値にないため失敗する。作品追加前は76 pass。基盤スクリプトは作品PRで変更禁止のため、人間・leadへ別途判断を引き継ぐ。`pnpm check`（5作品）と作品の直接tsc・buildは成功しているが、基盤テスト全件成功とはしない。
-
-実装・仕上げ後にはルートから次も実行する:
-
-```bash
-pnpm exec playwright install chromium --only-shell
+# console/network・接触音・横スクロール・描画時間
 pnpm verify abyss-winder
 ```
 
-実装1（円周操作・描画）の実測（2026-10-28）: pass。console errors 0 / 404 0、mouse-sound maxAmp 0.0633、touch-sound maxAmp 0.0612（states intro→idle）、横スクロールなし、meanDrawMs 1280=1.67 / 375=1.19。誘導文は実幅クランプと窓の縁（リム外周+6px）・垂れ索帯（距離≥8px）の候補評価で配置し、375px/1280px/768px の実描画ピクセル解析で「窓の縁から離れる・垂れ索と8px以上」を数値確認済み。一般verifyの短いなぞりは局所音・console/404・横スクロール・描画負荷の検査であり、一周完成の証明ではない。専用の円周操作検証（マウス/実タッチの連続一周・キャンセル・多pointer・140ms同期の実測）は後続の検証担当の領分。実測結果は `.verify/abyss-winder/` に出るがコミットしない。`?mute` の無音は期待動作として別検証する。
+renderer testはbefore/afterで検証用Viteとブラウザを自動起動・終了する。任意の `RENDERER_EVIDENCE_DIR` を指定すると状態別PNG / Canvas stroke等のJSONを保存する。作品コードや秘密ファイルを置く場所ではなく、Git追跡外の証跡置き場を指定する。
 
-実装2（音響同期・仕上げ）の実測（2026-10-28）: 上のゲートをすべて再実行して pass。`pnpm verify abyss-winder` は console 0 / 404 0、mouse-sound maxAmp 0.0050、touch-sound maxAmp 0.0044（接触音をベル風の長い尾から短い爪へ変えたため前段より小さいがしきい値は満たす）、横スクロールなし、meanDrawMs 1280=1.15 / 375=1.04。円周一周をマウス合成で2連続実施したハーネス実測では、巻き取り中（摩擦+拍下降）の maxAmp 0.0134 / 0.0135、閉鎖時（クリック・木胴・ベル）0.0542 / 0.0427、閉鎖予定の予約（plannedToken）を確認、console/pageerror 0、各閉鎖後に idle へ復帰。サムネイルのピクセル解析は平均輝度 20.7・白飛び 0・青系 1237 px。140ms 停止の実機での音視覚同期の実測は検証担当の領分として残す。
+作品とrootの `test` / `lint` / `typecheck` スクリプトは未定義。新設せず上の直接コマンドを使い、未定義スクリプトの成功とは呼ばない。Workers poolも対象外で新設・移行しない。
+
+### R1-Gの実測（2026-10-28、Node26.5.1 / pnpm11.21.0）
+
+| コマンド・項目 | 結果 |
+|---|---|
+| 変更前のwinding単独 | exit 0、30成功 / 0失敗（初回25件を維持） |
+| 上記3ファイルのNode同時実行 | exit 0、62成功 / 0失敗（winding30 / audio12 / renderer20） |
+| 直接tsc | exit 0 |
+| 作品build | exit 0、既存500kB超chunk警告あり |
+| pnpm check | exit 0、5作品 |
+| pnpm verify abyss-winder | exit 0、5項目成功 |
+| console-and-network | 成功、console errors / 404 / requestFailedは各0 |
+| mouse-sound / touch-sound | 成功、maxAmp 0.004514859893246704 / 0.004952188931075258 |
+| no-horizontal-scroll | 成功、375/1280pxの導入・操作後とも差0px |
+| frame-stats | 成功（計測のみ）、meanDrawMs 1280=1.0303493618444584 / 375=1.0336617444732115 |
+
+一般verifyの短いなぞりは接触音・負荷の検査であり、一周完成の証明ではない。音源テストは実装コードのsource予約・終了・参照を模擬contextで検査し、実機の音や聴感を測るものではない。rendererの決定的snapshot検査も実機操作とは別。結果と4枚の画像は `.verify/abyss-winder/` に出るがコミットしない。
+
+親成果の補助証跡: 初回visualは375/1280で各3周の合成操作、Cは両幅×模擬hidden/blur/resizeの6条件、Eは論理140msに対する実rAF観測150ms（両幅）、Fは375×812 / 1280×800 / 375×667 / 480×800 / 768×1024の5条件×19確認を実施した。Fの索端案内は窓との最短距離4.61/19.35pxで非交差であり、一律6px以上とはしない。これらをGで再実行した、または実機・独立審美が成功したとは主張しない。
+
+### 既知の範囲外・未確認
+
+- 共通テスト `node --test scripts/tests/work-json.test.mjs` は初回の記録で75成功 / 1失敗（追加前76成功）。841〜847行の期待値が既存4作品に固定され、新作abyss-winderが含まれない。R1-Gでは未実行・未変更。人間の基盤PR判断へ返し、`pnpm check` の成功を共通テスト全件成功に読み替えない。
+- 個別輪の描画は6本を上限として等高線へ集約するが、状態側 `ringStartAngles` は一周ごとに増える。小さい数値配列の長時間実害は未再現につきcode N6は今回見送り。6輪超・12周・長時間の確認は残る。
+- デザインのnarrow閾値・ガラス面通過・微弱な魚影は意図として維持。π/6移動の受入記録や論理140msがあっても、12周・実機出力同期まで確認したことにはならない。
+- 実機・聴感は人間確認推奨。後続の独立tester / reviewer / visual担当が同じ最終SHAでR1を確認し、統合担当が採否を判断する。
 
 ## 調整する場所
 
-`src/tuning.ts` に視覚・操作・拍の定数を集約する設計。パレット・幾何（窓半径の2比率式）・円周判定の許容差・共通時刻契約（`EIGHTH_MS` / `HITSTOP_MS`）・品質段階をここで触る。[architectureの調整ノブ](docs/architecture.md#10-調整ノブ) に初期値を記載。完成角 `2π` と停止140msを、verify通過のために緩めない。
+`src/tuning.ts` にパレット・確定半径の2比率式・円周許容差・拍/停止・品質段階を集約。音源のvoice/gain等は `src/audio/synth-engine.ts`、導入の題名・配置・退場は `src/style.css`、開始案内は `index.html`。[調整ノブ](docs/architecture.md#10-調整ノブ) を参照。完成角2πと論理停止140msをverify通過のために緩めない。
 
 ## プレビューと公開
 
 ```bash
+# 全作品をまとめてローカル出力
 pnpm build
+# PRコメントに実在する最新headのプレビューを確認してから実行
 pnpm verify abyss-winder --url <PRに付いたプレビューのベースURL>
 ```
 
-作品は相対アセットで `/works/abyss-winder/` へ配信される。PRは `main` をbaseにし、変更をこの作品フォルダだけに限定する。構想段階はdraftを維持し、実装・独立検証後のready化は統合担当の判断。CloudflareがPRへ付けたプレビューURLを使い、URLを推測しない。
+相対アセットで `/works/abyss-winder/` へ配信する。PRはmainをbaseとし、変更は作品フォルダ内だけ。CloudflareがPRに付けるプレビューURLを使い、URLを推測しない。ローカルverifyとプレビューverifyの成功を混同せず、対象commitも照合する。
 
-本番公開は**人間がGitHubでmainへmerge**した後のWorkers Buildsに委ねる。制作担当は `gh pr merge` や `wrangler deploy` を実行しない。開いたローカルdev/previewサーバーは作業後に終了する。
+R1の独立検証・レビュー・統合判断まではdraftを維持する。ready化・採否更新は別の統合判断に委ねる。**人間がGitHubでmainへmergeした後にWorkers Buildsが本番公開する。** 制作担当は `gh pr merge` / `wrangler deploy` を実行しない。
 
 ## ライセンス・素材
 
-作品はMIT。生成画像0枚、外部アセット0件。p5は既存テンプレートの依存（LGPL-2.1）、ViteはMIT、TypeScriptはApache-2.0であり、作品のライセンスと依存のライセンスは区別する。AGPL/GPLの新規依存は追加しない。
+作品はMIT。生成画像0枚、外部アセット0件。p5は既存テンプレートの依存（LGPL-2.1）、ViteはMIT、TypeScriptはApache-2.0であり、作品と依存のライセンスは区別する。AGPL/GPLの新規依存は追加しない。
