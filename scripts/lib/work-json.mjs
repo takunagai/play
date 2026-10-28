@@ -1,8 +1,9 @@
 // work.json の契約（VPS の kickoff と共有する。仕様の正本は docs/work-json.md）
 // 語彙はスキル interactive-art-builder の references/wizard.md の選択肢ラベルと完全一致させる。
-import { readdir, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { readdir, readFile, lstat } from "node:fs/promises";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const VOCABULARY = {
@@ -123,26 +124,344 @@ export function validateWork(work, { dirName, workDir } = {}) {
   return errors;
 }
 
-/** works/*\/work.json を読み、{ dirName, workDir, work, errors } の配列を返す（フォルダ名順） */
-export async function loadWorks({ shouldCheckFiles = false } = {}) {
-  const entries = await readdir(WORKS_DIR, { withFileTypes: true });
+/** Git のコマンドを 1 回だけ実行し、stdout を返す。失敗は stderr を載せて投げる（潰さない）。 */
+function runGit(cwd, args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message ?? (result.stderr ?? "").trim();
+    const error = new Error(`git ${args.join(" ")} が失敗した: ${detail}`);
+    error.stderr = result.stderr ?? "";
+    throw error;
+  }
+  return result.stdout;
+}
+
+/**
+ * HEAD の状態を確認する。true なら commit 済み、false なら unborn（コミットが 1 つも無い新規リポジトリ）。
+ * rev-parse の stderr は正規 unborn と壊れた ref で同じ語句になるため、語句一致で unborn を
+ * 断定しない。非空の symbolic-ref 出力だけでも不十分で、dangling symlink や directory として
+ * 存在する ref でも symbolic-ref は成功する。そこで参照先の実体 path を Git 自身に解決させ
+ * （linked worktree や common dir を考慮）、「HEAD が symbolic かつ参照先 ref の実体が
+ * loose・packed ともに存在しない」場合だけ unborn とする。loose の実体と packed-refs は
+ * ともに lstat で実体種別を確認し、壊れた実体・読み取れない・確認不能な Git 異常は投げる
+ * （unborn に握り潰さない）。
+ */
+function verifyHeadExists(rootDir) {
+  try {
+    runGit(rootDir, ["rev-parse", "--verify", "HEAD"]);
+    return true;
+  } catch (verifyError) {
+    let target;
+    try {
+      target = runGit(rootDir, ["symbolic-ref", "-q", "HEAD"]).trim();
+    } catch (symbolicError) {
+      throw new Error(
+        `HEAD を読み取れない（新規リポジトリ以外の Git 異常は潰さない）: rev-parse: ${verifyError.message} / symbolic-ref: ${symbolicError.message}`,
+      );
+    }
+    if (target === "") {
+      throw new Error(`HEAD を読み取れない（symbolic HEAD の参照先が読めない）: ${verifyError.message}`);
+    }
+    if (!target.startsWith("refs/")) {
+      throw new Error(`HEAD を読み取れない（symbolic HEAD の参照先が ref 形式でない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    let refPath;
+    let packedPath;
+    try {
+      refPath = runGit(rootDir, ["rev-parse", "--git-path", target]).trim();
+      packedPath = runGit(rootDir, ["rev-parse", "--git-path", "packed-refs"]).trim();
+    } catch (resolveError) {
+      throw new Error(
+        `HEAD を読み取れない（参照先 ref の path を解決できない）: ${target} / rev-parse: ${verifyError.message} / git-path: ${resolveError.message}`,
+      );
+    }
+    if (refPath === "" || packedPath === "") {
+      throw new Error(`HEAD を読み取れない（参照先 ref の path が空）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    // --git-path の出力は git プロセスの cwd（rootDir）相対になることがある
+    const refPathAbs = isAbsolute(refPath) ? refPath : join(rootDir, refPath);
+    const packedPathAbs = isAbsolute(packedPath) ? packedPath : join(rootDir, packedPath);
+    let refKind;
+    try {
+      refKind = probePathKindSync(refPathAbs);
+    } catch (probeError) {
+      throw new Error(`HEAD を読み取れない（参照先 ref の実体を確認できない）: ${target} / ${probeError.message}`);
+    }
+    if (refKind === "missing") {
+      // loose 実体が無くても packed-refs に存在すれば ref は在る（unborn には潰せない）。
+      // existsSync は dangling symlink を「無い」と誤認するため、loose 側と同じく lstat で実体種別を確認する
+      let packedKind;
+      try {
+        packedKind = probePathKindSync(packedPathAbs);
+      } catch (packedProbeError) {
+        throw new Error(`HEAD を読み取れない（packed-refs の実体を確認できない）: ${target} / ${packedProbeError.message}`);
+      }
+      if (packedKind === "missing") {
+        return false; // loose も packed も実体が無い → 正規 unborn（未コミット新規リポジトリ）
+      }
+      if (packedKind === "symlink") {
+        throw new Error(
+          `HEAD を読み取れない（packed-refs が symlink になっている。壊れた実体は unborn に潰さない）: ${target} / rev-parse: ${verifyError.message}`,
+        );
+      }
+      if (packedKind === "dir") {
+        throw new Error(`HEAD を読み取れない（packed-refs が directory になっている）: ${target} / rev-parse: ${verifyError.message}`);
+      }
+      if (packedKind !== "file") {
+        throw new Error(`HEAD を読み取れない（packed-refs が通常ファイルでない）: ${target} / rev-parse: ${verifyError.message}`);
+      }
+      let packed;
+      try {
+        packed = readFileSync(packedPathAbs, "utf8");
+      } catch (packedError) {
+        throw new Error(`HEAD を読み取れない（packed-refs を読めない）: ${target} / ${packedError.message}`);
+      }
+      for (const line of packed.split("\n")) {
+        // レコードは「<OID> 空白 <refname>」。refname は完全一致で比較する（peel 行 ^<OID> は空白を含まない）
+        const sep = line.indexOf(" ");
+        if (sep <= 0 || line.slice(sep + 1).trimEnd() !== target) continue;
+        throw new Error(
+          `HEAD を読み取れない（packed-refs に参照先が在るのに HEAD が解決できない）: ${target} / rev-parse: ${verifyError.message}`,
+        );
+      }
+      return false; // packed-refs に参照先のレコードが無い → 正規 unborn
+    }
+    if (refKind === "symlink") {
+      throw new Error(
+        `HEAD を読み取れない（参照先 ref が symlink になっている。壊れた実体は unborn に潰さない）: ${target} / rev-parse: ${verifyError.message}`,
+      );
+    }
+    if (refKind === "dir") {
+      throw new Error(`HEAD を読み取れない（参照先 ref が directory になっている）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    if (refKind !== "file") {
+      throw new Error(`HEAD を読み取れない（参照先 ref が通常ファイルでない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    let content;
+    try {
+      content = readFileSync(refPathAbs, "utf8").trim();
+    } catch (readError) {
+      throw new Error(`HEAD を読み取れない（参照先 ref を読めない）: ${target} / ${readError.message}`);
+    }
+    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(content)) {
+      throw new Error(`HEAD を読み取れない（参照先 ref の中身が object SHA でない）: ${target} / rev-parse: ${verifyError.message}`);
+    }
+    throw new Error(
+      `HEAD を読み取れない（参照先 ref の中身は object 形式だが HEAD が解決できない）: ${target} → ${content} / rev-parse: ${verifyError.message}`,
+    );
+  }
+}
+
+/** probePathKind の同期版。ENOENT は "missing"、lstat のその他の失敗は投げる（潰さない） */
+function probePathKindSync(path) {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return "symlink";
+    if (stat.isDirectory()) return "dir";
+    if (stat.isFile()) return "file";
+    return "other";
+  } catch (error) {
+    if (error.code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+/** index / HEAD の works/ 配下のパスから works/<slug>/ の slug を取り出す */
+function slugFromWorkPath(path) {
+  if (!path.startsWith("works/")) return null;
+  const rest = path.slice("works/".length);
+  if (rest === "") return null;
+  const slash = rest.indexOf("/");
+  const slug = slash === -1 ? rest : rest.slice(0, slash);
+  return slug === "" ? null : slug;
+}
+
+/**
+ * rootDir の Git 証拠を収集する（作品ごとに git を実行しない。全 slug 分を一括で取る）。
+ * - Git 作業場なら { indexSlugs, headSlugs, hasHead } を返す。
+ * - 非なら null を返す（保守的 fallback に回す）。
+ * - .git があるのに git が使えない・top-level が不一致等は追跡なしに潰さず投げる。
+ */
+function collectGitEvidence(rootDir) {
+  const gitMarkerExists = existsSync(join(rootDir, ".git"));
+  let topLevel;
+  try {
+    topLevel = runGit(rootDir, ["rev-parse", "--show-toplevel"]);
+  } catch (error) {
+    if (gitMarkerExists) {
+      throw new Error(`ROOT_DIR に .git があるのに Git リポジトリとして扱えない: ${error.message}`);
+    }
+    return null;
+  }
+  const rootReal = realpathSync(rootDir);
+  const topReal = realpathSync(topLevel.trim());
+  if (rootReal !== topReal) {
+    if (gitMarkerExists) {
+      throw new Error(`Git top-level（${topReal}）が ROOT_DIR（${rootReal}）と不一致（.git があるのに別のリポジトリに属している）`);
+    }
+    return null;
+  }
+
+  const indexSlugs = new Set();
+  for (const path of runGit(rootDir, ["ls-files", "-z", "--", "works/"]).split("\0")) {
+    const slug = slugFromWorkPath(path);
+    if (slug) indexSlugs.add(slug);
+  }
+
+  const headSlugs = new Set();
+  const hasHead = verifyHeadExists(rootDir);
+  if (hasHead) {
+    // --name-only -z の各 NUL レコードは path そのもの。タブはメタデータ区切りではなく
+    // 正当なパスの一部なので、区切り扱いで slice しない
+    for (const entry of runGit(rootDir, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "works/"]).split("\0")) {
+      if (entry === "") continue;
+      const slug = slugFromWorkPath(entry);
+      if (slug) headSlugs.add(slug);
+    }
+  }
+  return { indexSlugs, headSlugs, hasHead };
+}
+
+/** パスの状態を lstat で確かめる。ENOENT は "missing"、その他の失敗は { error } を返す（潰さない） */
+async function probePathKind(path) {
+  try {
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink()) return "symlink";
+    if (stat.isDirectory()) return "dir";
+    if (stat.isFile()) return "file";
+    return "other";
+  } catch (error) {
+    if (error.code === "ENOENT") return "missing";
+    return { error: `${path} を確認できない: ${error.message}` };
+  }
+}
+
+/**
+ * work.json が無い dir が「生成物だけ」かどうかを直下だけ見て判定する。
+ * 空、または直下が通常 dir の node_modules/dist のみなら "artifact"（残存物として除外）。
+ * 内部は走査しない。gitignore を根拠にはしない。走査に失敗したら { error }。
+ */
+async function classifyArtifactOnly(workDir, dirName) {
+  let dirents;
+  try {
+    dirents = await readdir(workDir, { withFileTypes: true });
+  } catch (error) {
+    return { error: `works/${dirName} を走査できない: ${error.message}` };
+  }
+  const artifactOnly = dirents.every(
+    (entry) => entry.isDirectory() && (entry.name === "node_modules" || entry.name === "dist"),
+  );
+  return artifactOnly ? "artifact" : "content";
+}
+
+/**
+ * works/*\/work.json を読み、{ dirName, workDir, work, errors } の配列を返す（フォルダ名順）。
+ * rootDir はテスト用の差し替え口（省略時は ROOT_DIR）。
+ *
+ * 列挙の規約:
+ * - Git 作業場では候補 = 実ディレクトリ ∪ index 上の slug。
+ *   - 実在する work.json は tracked/untracked を問わず parse/validateWork で検証する
+ *     （壊れた JSON・読取失敗を skip しない）。
+ *   - manifest が無くても index/HEAD に slug 配下の追跡証拠があれば欠落エラー
+ *     （unstaged/staged の manifest 削除は生成物だけでもエラー）。
+ *   - 全削除 unstaged（index 残留・dir 不在）は index 候補としてエラー、
+ *     全削除 staged かつ dir 不在（git rm -r 済み）は意図的削除として列挙しない。
+ *   - HEAD にしか残っていない slug（削除 commit 後の不在）は列挙しない。
+ *   - 生成物（node_modules/dist）だけの未追跡 dir と空 dir は除外する
+ *     （直下だけ見る。gitignore を根拠にはしない。同名のファイル・symlink は許さない）。
+ * - 非 Git では保守的に、manifest が無い dir は空・生成物のみでも欠落エラー。
+ * - 作品 dir の symlink は列挙外（index/HEAD 証拠があるなら黙殺せずエラー）、
+ *   manifest への symlink は読む（dangling は欠落エラーとして除外しない）。
+ */
+export async function loadWorks({ shouldCheckFiles = false, rootDir = ROOT_DIR } = {}) {
+  const worksDir = join(rootDir, "works");
+  // 全削除 staged（git rm -r）で works/ 自体が消えることがある。index 候補の判定は続行する
+  let dirents;
+  try {
+    dirents = await readdir(worksDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    dirents = [];
+  }
+  const gitEvidence = collectGitEvidence(rootDir);
+  const realDirNames = new Set(dirents.filter((item) => item.isDirectory()).map((item) => item.name));
+  const candidates = [...new Set([...realDirNames, ...(gitEvidence ? gitEvidence.indexSlugs : [])])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+
   const results = [];
-  for (const entry of entries.filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const workDir = join(WORKS_DIR, entry.name);
-    const jsonPath = join(workDir, "work.json");
-    if (!existsSync(jsonPath)) {
-      results.push({ dirName: entry.name, workDir, work: null, errors: ["work.json が無い"] });
+  for (const dirName of candidates) {
+    const workDir = join(worksDir, dirName);
+    const indexEvidence = gitEvidence ? gitEvidence.indexSlugs.has(dirName) : false;
+    const trackedEvidence = gitEvidence ? indexEvidence || gitEvidence.headSlugs.has(dirName) : false;
+    const push = (work, errors) => results.push({ dirName, workDir, work, errors });
+
+    const dirKind = await probePathKind(workDir);
+    if (typeof dirKind !== "string") {
+      push(null, [dirKind.error]);
       continue;
     }
+    if (dirKind === "missing") {
+      if (!gitEvidence) {
+        push(null, [`works/${dirName} が index にあるが実ディレクトリが無い`]);
+      } else if (!indexEvidence && gitEvidence.headSlugs.has(dirName)) {
+        continue; // HEAD にしか残っていない slug（削除 commit 後の不在）は列挙しない
+      } else {
+        push(null, [`works/${dirName} が index にあるが実ディレクトリが無い（全削除は git rm で stage する）`]);
+      }
+      continue;
+    }
+    if (dirKind === "symlink") {
+      if (trackedEvidence) {
+        push(null, [`works/${dirName} が symlink になっている（追跡証拠があるため列挙対象にできない）`]);
+      }
+      continue; // 証拠が無い symlink 作品 dir は従来通り列挙外
+    }
+    if (dirKind !== "dir") {
+      push(null, [`works/${dirName} がディレクトリでない`]);
+      continue;
+    }
+
+    const jsonPath = join(workDir, "work.json");
+    const manifestKind = await probePathKind(jsonPath);
+    if (typeof manifestKind !== "string") {
+      push(null, [manifestKind.error]);
+      continue;
+    }
+    if (manifestKind === "missing") {
+      if (!gitEvidence || trackedEvidence) {
+        push(null, [trackedEvidence ? `work.json が無い（index/HEAD に作品の追跡証拠がある）` : "work.json が無い"]);
+        continue;
+      }
+      const verdict = await classifyArtifactOnly(workDir, dirName);
+      if (verdict === "artifact") continue; // 生成物だけの残存 dir・空 dir は除外
+      push(null, [verdict.error ?? "work.json が無い"]);
+      continue;
+    }
+    if (manifestKind === "dir") {
+      push(null, ["work.json がディレクトリになっている"]);
+      continue;
+    }
+    if (manifestKind === "other") {
+      push(null, ["work.json が通常ファイルでない"]);
+      continue;
+    }
+
     let work;
     try {
-      work = JSON.parse(await readFile(jsonPath, "utf8"));
+      work = JSON.parse(await readFile(jsonPath, "utf8")); // symlink の manifest も従来通り読む
     } catch (error) {
-      results.push({ dirName: entry.name, workDir, work: null, errors: [`work.json を JSON として読めない: ${error.message}`] });
+      if (error.code === "ENOENT") {
+        push(null, ["work.json が無い（symlink の参照先が無い）"]); // dangling symlink は生成物除外にしない
+      } else if (error.code === "EISDIR") {
+        push(null, ["work.json がディレクトリになっている"]);
+      } else {
+        push(null, [`work.json を JSON として読めない: ${error.message}`]);
+      }
       continue;
     }
-    const errors = validateWork(work, { dirName: entry.name, workDir: shouldCheckFiles ? workDir : undefined });
-    results.push({ dirName: entry.name, workDir, work, errors });
+    const errors = validateWork(work, { dirName, workDir: shouldCheckFiles ? workDir : undefined });
+    push(work, errors);
   }
   return results;
 }
