@@ -16,6 +16,7 @@ import { computeLayout, createRendererState, drawScene, type Layout, type Render
 import {
   CONTACT_MIN_INTERVAL_MS,
   CONTACT_RIPPLE_STEPS,
+  HITSTOP_MS,
   PARTICLE_COUNT_STEPS,
 } from "./tuning";
 import { createWindingEngine } from "./winding";
@@ -40,9 +41,28 @@ let lastError = "";
 let introHiddenAtMs: number | null = null;
 /** 円外接触音の間引き（§8: 過密発音を 50ms 以上間引く） */
 let lastContactNoteMs = -Infinity;
+/** 巻き取り試行の識別子（音響 cue の gestureId。掴みごとに採番する） */
+let gestureCounter = 0;
+let activeGestureId = 0;
+/** planClosure で音側が予約した閉鎖の token（commit までは cancelClosure で取り消せる） */
+let plannedToken: number | null = null;
 
 const engine = createWindingEngine({
   onGrab(x, y) {
+    // 摩擦・拍下降は winding cue（start）で始める。掴みの局所爪音は接触音の契約のまま
+    activeGestureId = ++gestureCounter;
+    const grabSnapshot = engine.snapshot();
+    if (grabSnapshot.beatOriginMs !== null) {
+      audio.winding({
+        gestureId: activeGestureId,
+        phase: "start",
+        progress: 0,
+        speed: 0,
+        accuracy: 1,
+        atMs: performance.now(),
+        beatOriginMs: grabSnapshot.beatOriginMs,
+      });
+    }
     noteAt(x, y, 0.8);
   },
   onContact(x, y) {
@@ -53,14 +73,39 @@ const engine = createWindingEngine({
       noteAt(x, y, 0.4);
     }
   },
-  onAccepted() {
-    // 閉鎖音の予約は音響カード（実装2）の契約。実装1は視覚の論理時計だけを公開する
+  onAccepted(timeline) {
+    // 閉鎖音の予約は音側の時計で行う。音響カードは planClosureTimes（winding.ts）と同じ
+    // 拍式を使うため、freezeAtMs（式の不動点）を渡すと戻りは pendingTimeline と厳密に一致する
+    const origin = engine.snapshot().beatOriginMs;
+    const accepted = timeline.closeAtMs - HITSTOP_MS;
+    const planned = audio.planClosure(timeline.token, accepted, origin ?? accepted);
+    if (planned.freezeAtMs !== timeline.freezeAtMs || planned.closeAtMs !== timeline.closeAtMs) {
+      lastError = `閉鎖予定の不一致: audio=${planned.freezeAtMs}/${planned.closeAtMs}`;
+    }
+    plannedToken = timeline.token;
   },
-  onCommitted() {
-    // commit に紐づく音も実装2
+  onCommitted(timeline) {
+    // 閉鎖音（クリック・木胴・ベル）は planClosure で音側の時計に予約済み。ここでは触らない
+    if (plannedToken === timeline.token) plannedToken = null;
   },
   onCancelled() {
-    // 罰の大音量なし。摩擦・予約音の取消は実装2
+    // 罰の大音量なし。未発音の閉鎖予約と同 gesture の摩擦・拍予約を消す
+    if (plannedToken !== null) {
+      audio.cancelClosure(plannedToken);
+      plannedToken = null;
+    }
+    const cancelSnapshot = engine.snapshot();
+    if (cancelSnapshot.beatOriginMs !== null) {
+      audio.winding({
+        gestureId: activeGestureId,
+        phase: "cancel",
+        progress: 0,
+        speed: 0,
+        accuracy: 0,
+        atMs: performance.now(),
+        beatOriginMs: cancelSnapshot.beatOriginMs,
+      });
+    }
   },
 });
 
@@ -159,7 +204,11 @@ new P5((p: P5) => {
 
     window.addEventListener("blur", () => engine.interrupt(performance.now()));
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) engine.interrupt(performance.now());
+      if (document.hidden) {
+        engine.interrupt(performance.now());
+        // 非表示時は音側の予約・摩擦も止める（§7 suspend）。visibility 判定自体は main の責務
+        audio.suspend();
+      }
     });
     window.addEventListener(
       "resize",
@@ -184,6 +233,18 @@ new P5((p: P5) => {
     quality.recordFrame(Math.min(p.deltaTime || 16.7, 100));
 
     const snapshot = engine.snapshot();
+    // 巻き取り中の音響 cue（1 フレーム 1 回以下）。拍の予約は音側の lookahead で行う
+    if (snapshot.state === "winding" && snapshot.beatOriginMs !== null) {
+      audio.winding({
+        gestureId: activeGestureId,
+        phase: "move",
+        progress: snapshot.progress,
+        speed: snapshot.speed,
+        accuracy: snapshot.accuracy,
+        atMs: drawStartMs,
+        beatOriginMs: snapshot.beatOriginMs,
+      });
+    }
     const ctx = p.drawingContext;
     ctx.save();
     drawScene(ctx, rendererState, {
