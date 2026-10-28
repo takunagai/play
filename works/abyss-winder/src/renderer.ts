@@ -65,6 +65,7 @@ import {
   ROPE_EDGE_EXTRA_PX,
   ROPE_HAIR_OFFSET_PX,
   ROPE_HAIR_WIDTH_PX,
+  ROPE_LENGTH_MAX_RATIO,
   ROPE_RADIUS_OFFSET_PX,
   ROPE_SLACK_SWAY_MS,
   ROPE_TWIST_ARC_PX,
@@ -153,6 +154,8 @@ export interface RendererState {
   guideAlpha: number;
   /** 初回閉鎖時刻（魚影が退く起点。renderer だけが知る） */
   firstRingCloseAtMs: number | null;
+  /** 現在の索長。受理時に計算される「次索長」で停止中の形を変えない */
+  ropeLengthRatio: number;
 }
 
 function createParticles(count: number, seedSpread: number): Particle[] {
@@ -197,6 +200,7 @@ export function createRendererState(): RendererState {
     contactRipples: [],
     guideAlpha: 1,
     firstRingCloseAtMs: null,
+    ropeLengthRatio: ROPE_LENGTH_MAX_RATIO,
     spawnContactRipple(x, y, nowMs) {
       state.contactRipples.push({ x, y, bornMs: nowMs });
     },
@@ -233,6 +237,9 @@ export function drawScene(
   const { cx, cy, radius, rimWidth } = layout;
   const sceneTimeMs = snapshot.sceneTimeMs;
   const narrow = Math.min(width, height) < WINDOW_RADIUS_NARROW_MAX_MIN_EDGE_PX;
+  if (snapshot.state === "intro" || snapshot.state === "idle" || snapshot.state === "winding") {
+    state.ropeLengthRatio = snapshot.nextRopeLengthRatio;
+  }
 
   // 装飾密度だけを品質の段に従わせる（判定ロジック・時刻契約は変えない）
   const particleCount = PARTICLE_COUNT_STEPS[Math.min(input.qualityLevel, PARTICLE_COUNT_STEPS.length - 1)];
@@ -358,6 +365,13 @@ export function drawScene(
   // winding の可視進捗（cancelled では 180ms の戻り込み）
   const visibleNetAngle = snapshot.netAngle;
   const winding = snapshot.state === "winding" || (snapshot.state === "cancelled" && visibleNetAngle > 0);
+  const holdingRope = snapshot.state === "aligning" || snapshot.state === "hitstop";
+  // 受理済みの全周索を閉鎖中に蓄積索へ渡す。青輪の描き始めで索を切り戻さない。
+  const handingOffRope = snapshot.state === "closing";
+  const ropeHandoff = handingOffRope && snapshot.lastRingCloseAtMs !== null
+    ? easeOutCubic((nowMs - snapshot.lastRingCloseAtMs) / RING_CLOSE_MS)
+    : 0;
+  const ropeNetAngle = handingOffRope ? TAU : visibleNetAngle;
   // 最終目盛りの発光（freezeAtMs の 60ms 前からランプイン、hitstop 中は全開）
   let finalTickGlow = 0;
   if (snapshot.freezeAtMs !== null && snapshot.state !== "cancelled") {
@@ -456,16 +470,17 @@ export function drawScene(
     // 蓄積した巻き索も残す（弱く）
     ctx.strokeStyle = PALETTE_ROPE;
     ctx.lineWidth = ROPE_WIDTH_PX * 0.8;
-    ctx.globalAlpha = alpha * 0.6;
+    ctx.globalAlpha = alpha * 0.6 * (isNewest && handingOffRope ? ropeHandoff : 1);
     ctx.beginPath();
-    ctx.arc(cx, cy, radius - ROPE_RADIUS_OFFSET_PX, startAngle, startAngle + TAU * closeProgress);
+    ctx.arc(cx, cy, radius - ROPE_RADIUS_OFFSET_PX, startAngle, startAngle + TAU);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
   // ---- 巻き取り中の索（円周 R−2 に時計回りで巻かれる） ----
-  if (winding && snapshot.startAngle !== null) {
-    const ropeAngle = snapshot.startAngle + Math.min(visibleNetAngle, TAU);
+  if ((winding || holdingRope || handingOffRope) && snapshot.startAngle !== null) {
+    ctx.globalAlpha = 1 - ropeHandoff;
+    const ropeAngle = snapshot.startAngle + Math.min(ropeNetAngle, TAU);
     const ropeRadius = radius - ROPE_RADIUS_OFFSET_PX;
     // 下縁 → 本体 → 髪線の 3 層
     ctx.strokeStyle = PALETTE_ROPE_DK;
@@ -487,7 +502,7 @@ export function drawScene(
     ctx.strokeStyle = PALETTE_ROPE_TW;
     ctx.lineWidth = ROPE_TWIST_WIDTH_PX;
     const twistPhase = (sceneTimeMs * 0.004) % ROPE_TWIST_ARC_PX;
-    const arcLength = Math.min(visibleNetAngle, TAU) * ropeRadius;
+    const arcLength = Math.min(ropeNetAngle, TAU) * ropeRadius;
     for (let s = twistPhase; s < arcLength; s += ROPE_TWIST_ARC_PX) {
       const a = snapshot.startAngle + s / ropeRadius;
       ctx.beginPath();
@@ -497,7 +512,7 @@ export function drawScene(
     }
 
     // 垂れ索（巻かれていない残りが索端から下へ沈む。指への直線は描かない）
-    const progress = clamp01(visibleNetAngle / TAU);
+    const progress = clamp01(ropeNetAngle / TAU);
     drawSlackRope(
       ctx,
       cx + Math.cos(ropeAngle) * ropeRadius,
@@ -506,6 +521,7 @@ export function drawScene(
       sceneTimeMs,
       width,
       height,
+      state.ropeLengthRatio,
     );
   } else if (snapshot.state === "intro" || (snapshot.state === "idle" && rings.length === 0)) {
     // まだ一周していない: 索端から画面外まで垂れる
@@ -517,13 +533,9 @@ export function drawScene(
       sceneTimeMs,
       width,
       height,
+      snapshot.nextRopeLengthRatio,
     );
-  } else if (
-    snapshot.state === "aligning" ||
-    snapshot.state === "hitstop" ||
-    snapshot.state === "closing" ||
-    snapshot.state === "settling"
-  ) {
+  } else if (snapshot.state === "closing" || snapshot.state === "settling") {
     // 閉鎖後: 次の索端のたるみが +300ms 後に 400ms で伸びる
     const growStart = (snapshot.closeAtMs ?? nowMs) + NEXT_ROPE_DELAY_MS;
     const growth = clamp01((nowMs - growStart) / NEXT_ROPE_GROW_MS);
@@ -536,6 +548,7 @@ export function drawScene(
         sceneTimeMs,
         width,
         height,
+        snapshot.nextRopeLengthRatio,
       );
     }
   } else if (snapshot.state === "idle") {
@@ -548,8 +561,11 @@ export function drawScene(
       sceneTimeMs,
       width,
       height,
+      snapshot.nextRopeLengthRatio,
     );
   }
+
+  ctx.globalAlpha = 1;
 
   // ---- 索端マーカー（白い接線方向の短線・脈動） ----
   const showMarker =
@@ -625,16 +641,18 @@ function drawSlackRope(
   sceneTimeMs: number,
   width: number,
   height: number,
+  lengthRatio: number,
 ): void {
   // たるみ揺れ: 周期 3.2s、索端 ±6px・画面端 ±14px
   const sway = Math.sin((sceneTimeMs / ROPE_SLACK_SWAY_MS) * TAU) * 6;
   const swayEnd = Math.sin((sceneTimeMs / ROPE_SLACK_SWAY_MS) * TAU + 0.9) * 14;
   const drop = 46 + 120 * slack;
-  const bow = 10 + 34 * slack;
-  // 出口は索端の左右の近い側
+  // 終点を画面外に保ったまま、内側へのたわみで可視弧長を増やす。
+  // 画面外の終点だけを伸ばしても見える長さは変わらない。
+  const bow = 10 + 34 * slack + Math.min(width, height) * lengthRatio * 0.65;
   const exitSide = tipX < width / 2 ? -1 : 1;
   const exitX = tipX + exitSide * (34 + 30 * slack) + swayEnd;
-  const exitY = height * 0.82 + Math.abs(swayEnd) * 0.4;
+  const exitY = height + ROPE_WIDTH_PX * 4 + Math.abs(swayEnd) * 0.4;
   ctx.save();
   ctx.lineCap = "round";
   // 下縁 → 本体 → 髪線
@@ -648,9 +666,9 @@ function drawSlackRope(
     ctx.beginPath();
     ctx.moveTo(tipX + layer.offset + sway * 0.2, tipY);
     ctx.bezierCurveTo(
-      tipX + sway * 0.6,
+      tipX - exitSide * bow + sway * 0.6,
       tipY + drop * 0.5,
-      (tipX + exitX) / 2 + bow,
+      (tipX + exitX) / 2 - exitSide * bow,
       (tipY + exitY) / 2,
       exitX + layer.offset,
       exitY,
