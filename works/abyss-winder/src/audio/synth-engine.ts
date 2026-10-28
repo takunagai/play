@@ -54,6 +54,7 @@ interface VoiceGroup {
   /** パン等、group 固有の途中ノード（dispose で切り離す） */
   extraNodes: AudioNode[];
   sources: AudioScheduledSourceNode[];
+  closureToken: number | null;
   gestureId: number;
   kind: "beat" | "closure" | "contact";
   /** 予約（または発音）開始の context 時刻 */
@@ -283,12 +284,9 @@ export class SynthAudioEngine implements AudioEngine {
     if (!this.isWired || !context) return;
     const now = context.currentTime;
     this.stopFriction(now);
-    for (const [token, group] of [...this.pendingClosures]) {
-      this.disposeGroup(group);
-      this.pendingClosures.delete(token);
-    }
+    // 予約・発音中とも全停止。token の削除も disposeGroup の共通 cleanup に任せる。
     for (const group of [...this.voiceGroups]) {
-      if (group.startAtCtx > now) this.disposeGroup(group);
+      this.disposeGroup(group);
     }
     // 拍ポインタを現在へ進める。解錠後の再開は次の拍から（過去の拍をまとめて鳴らさない）
     if (this.cueBeatOriginMs !== null) {
@@ -451,7 +449,7 @@ export class SynthAudioEngine implements AudioEngine {
 
   /** 金属クリック・木胴・青いベルを同じ context 時刻に同時発音（§8） */
   private scheduleClosureVoice(token: number, atCtx: number): void {
-    const group = this.createVoiceGroup("closure");
+    const group = this.createVoiceGroup("closure", token);
     group.startAtCtx = atCtx;
     this.addClaw(group, atCtx, null, 0.03, CLOSURE_CLICK_PEAK);
     this.addWood(group, atCtx);
@@ -469,6 +467,7 @@ export class SynthAudioEngine implements AudioEngine {
     env.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), t0 + 0.004);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + durationS);
     env.connect(group.gain);
+    group.extraNodes.push(env);
 
     const base = midi !== null ? midiToFrequency(midi) : 1900;
     const partials: ReadonlyArray<readonly [number, number]> =
@@ -480,6 +479,7 @@ export class SynthAudioEngine implements AudioEngine {
       const partialGain = context.createGain();
       partialGain.gain.value = gain;
       oscillator.connect(partialGain).connect(env);
+      group.extraNodes.push(partialGain);
       oscillator.start(t0);
       oscillator.stop(t0 + durationS + 0.02);
       this.trackSource(group, oscillator);
@@ -495,6 +495,7 @@ export class SynthAudioEngine implements AudioEngine {
     env.gain.exponentialRampToValueAtTime(CLOSURE_WOOD_PEAK, t0 + 0.01);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + WOOD_DECAY_S);
     env.connect(group.gain);
+    group.extraNodes.push(env);
     for (const [frequencyHz, gain] of [[92, 1], [138, 0.55]] as const) {
       const oscillator = context.createOscillator();
       oscillator.type = "sine";
@@ -502,6 +503,7 @@ export class SynthAudioEngine implements AudioEngine {
       const partialGain = context.createGain();
       partialGain.gain.value = gain;
       oscillator.connect(partialGain).connect(env);
+      group.extraNodes.push(partialGain);
       oscillator.start(t0);
       oscillator.stop(t0 + WOOD_DECAY_S + 0.02);
       this.trackSource(group, oscillator);
@@ -517,6 +519,7 @@ export class SynthAudioEngine implements AudioEngine {
     env.gain.exponentialRampToValueAtTime(CLOSURE_BELL_PEAK, t0 + 0.008);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + BELL_DECAY_S);
     env.connect(group.gain);
+    group.extraNodes.push(env);
     const base = midiToFrequency(BELL_BASE_MIDI);
     for (const [ratio, gain] of [[1, 1], [2.76, 0.12], [5.4, 0.05]] as const) {
       const oscillator = context.createOscillator();
@@ -525,6 +528,7 @@ export class SynthAudioEngine implements AudioEngine {
       const partialGain = context.createGain();
       partialGain.gain.value = gain;
       oscillator.connect(partialGain).connect(env);
+      group.extraNodes.push(partialGain);
       oscillator.start(t0);
       oscillator.stop(t0 + BELL_DECAY_S + 0.05);
       this.trackSource(group, oscillator);
@@ -550,6 +554,7 @@ export class SynthAudioEngine implements AudioEngine {
     burstGain.gain.setValueAtTime(peak, t0);
     burstGain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationS);
     source.connect(filter).connect(burstGain).connect(destination);
+    group.extraNodes.push(filter, burstGain);
     source.start(t0);
     source.stop(t0 + durationS + 0.01);
     this.trackSource(group, source);
@@ -557,7 +562,7 @@ export class SynthAudioEngine implements AudioEngine {
 
   // ---- 内部: voice 管理 ----
 
-  private createVoiceGroup(kind: VoiceGroup["kind"]): VoiceGroup {
+  private createVoiceGroup(kind: VoiceGroup["kind"], closureToken: number | null = null): VoiceGroup {
     const context = this.context!;
     // 上限超過時は古い予約から破棄する（§8 マスター）
     if (this.voiceGroups.length >= MAX_VOICES) {
@@ -569,6 +574,7 @@ export class SynthAudioEngine implements AudioEngine {
       gain,
       extraNodes: [],
       sources: [],
+      closureToken,
       gestureId: this.gestureId,
       kind,
       startAtCtx: context.currentTime,
@@ -580,15 +586,22 @@ export class SynthAudioEngine implements AudioEngine {
 
   private trackSource(group: VoiceGroup, source: AudioScheduledSourceNode): void {
     group.sources.push(source);
-    // 鳴り終わったら自壊する（voice の掃除をフレーム側に任せない）
+    // 短い励振の終了では他の声を止めず、最後の source が終わってから group を解放する。
     source.onended = () => {
-      this.disposeGroup(group);
+      source.onended = null;
+      source.disconnect();
+      const index = group.sources.indexOf(source);
+      if (index >= 0) group.sources.splice(index, 1);
+      if (group.sources.length === 0) this.disposeGroup(group);
     };
   }
 
   private disposeGroup(group: VoiceGroup): void {
     if (group.disposed) return;
     group.disposed = true;
+    if (group.closureToken !== null && this.pendingClosures.get(group.closureToken) === group) {
+      this.pendingClosures.delete(group.closureToken);
+    }
     for (const source of group.sources) {
       source.onended = null;
       try {
@@ -598,8 +611,10 @@ export class SynthAudioEngine implements AudioEngine {
       }
       source.disconnect();
     }
+    group.sources.length = 0;
     group.gain.disconnect();
     for (const node of group.extraNodes) node.disconnect();
+    group.extraNodes.length = 0;
     const index = this.voiceGroups.indexOf(group);
     if (index >= 0) this.voiceGroups.splice(index, 1);
   }
