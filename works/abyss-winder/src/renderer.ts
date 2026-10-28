@@ -16,6 +16,7 @@ import {
   CONTOUR_START_INSET_PX,
   CONTOUR_STEP_PX,
   CONTOUR_WIDTH_PX,
+  EIGHTH_MS,
   FISH_COUNT_STEPS,
   FISH_DRIFT_SPEED_PX_S,
   FISH_RETREAT_MS,
@@ -123,6 +124,7 @@ export interface SceneInput {
 
 interface Particle {
   angle: number;
+  /** 奥行き空間の半径比（0..1）。CSS pxへの変換は描画時のみ */
   baseRadius: number;
   depth: number;
   size: number;
@@ -158,7 +160,7 @@ export interface RendererState {
   ropeLengthRatio: number;
 }
 
-function createParticles(count: number, seedSpread: number): Particle[] {
+function createParticles(count: number): Particle[] {
   // 決定的な擬似乱数（起動ごとに絵が変わらない）
   let seed = 20261028;
   const next = (): number => {
@@ -169,7 +171,7 @@ function createParticles(count: number, seedSpread: number): Particle[] {
   for (let i = 0; i < count; i++) {
     particles.push({
       angle: next() * TAU,
-      baseRadius: Math.sqrt(next()) * seedSpread,
+      baseRadius: Math.sqrt(next()),
       depth: 0.35 + next() * 0.65,
       size: PARTICLE_RADIUS_MIN_PX + next() * (PARTICLE_RADIUS_MAX_PX - PARTICLE_RADIUS_MIN_PX),
       alpha: PARTICLE_ALPHA_MIN + next() * (PARTICLE_ALPHA_MAX - PARTICLE_ALPHA_MIN),
@@ -195,7 +197,7 @@ function createFishes(count: number): FishShadow[] {
 
 export function createRendererState(): RendererState {
   const state: RendererState = {
-    particles: createParticles(PARTICLE_COUNT_STEPS[0], 1),
+    particles: createParticles(PARTICLE_COUNT_STEPS[0]),
     fishes: createFishes(FISH_COUNT_STEPS[0]),
     contactRipples: [],
     guideAlpha: 1,
@@ -244,10 +246,7 @@ export function drawScene(
   // 装飾密度だけを品質の段に従わせる（判定ロジック・時刻契約は変えない）
   const particleCount = PARTICLE_COUNT_STEPS[Math.min(input.qualityLevel, PARTICLE_COUNT_STEPS.length - 1)];
   const fishCount = FISH_COUNT_STEPS[Math.min(input.qualityLevel, FISH_COUNT_STEPS.length - 1)];
-  while (state.particles.length > particleCount) state.particles.pop();
-  while (state.particles.length < particleCount) {
-    state.particles.push(...createParticles(particleCount - state.particles.length, Math.min(width, height) * 0.62));
-  }
+  if (state.particles.length !== particleCount) state.particles = createParticles(particleCount);
   state.fishes = createFishes(fishCount);
 
   // 魚影の退避と水紋の立ちは初回閉鎖を起点にする
@@ -286,7 +285,7 @@ export function drawScene(
   );
   for (const particle of state.particles) {
     const recede = recedeBase * particle.depth;
-    let displayRadius = particle.baseRadius + recede;
+    let displayRadius = particle.baseRadius * particleSpread + recede;
     if (displayRadius > maxParticleRadius) displayRadius -= maxParticleRadius; // 画面外で再流入
     const angle = particle.angle + sceneTimeMs * 0.000003 * particle.drift * 100;
     const px = cx + Math.cos(angle) * displayRadius;
@@ -360,7 +359,10 @@ export function drawScene(
 
   // ---- 目盛り（24 本・非発光・各拍で 1px 沈み込む） ----
   const beatOrigin = snapshot.beatOriginMs;
-  const beatPhase = beatOrigin !== null ? positiveAngle(sceneTimeMs - beatOrigin) : 0;
+  // beatOriginMsはperformance原点。停止で遅れるsceneTimeMsとは差を取らない。
+  // 停止中だけ論理freeze時刻を保持し、明けたら音側と同じ実時間の拍へ戻す。
+  const beatTimeMs = snapshot.state === "hitstop" ? (snapshot.freezeAtMs ?? nowMs) : nowMs;
+  const beatPhase = beatOrigin !== null ? ((beatTimeMs - beatOrigin) % EIGHTH_MS + EIGHTH_MS) % EIGHTH_MS : 0;
   const settlePx = easeOutCubic(beatPhase / BEAT_SETTLE_MS) * BEAT_SETTLE_PX;
   // winding の可視進捗（cancelled では 180ms の戻り込み）
   const visibleNetAngle = snapshot.netAngle;

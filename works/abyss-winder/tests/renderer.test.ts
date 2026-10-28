@@ -164,6 +164,242 @@ async function saveEvidence(width: number, captures: Awaited<ReturnType<typeof r
   await writeFile(`${dir}/${prefix}-${width}.json`, JSON.stringify(measurements, null, 2));
 }
 
+async function renderParticles(width: number) {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${baseUrl}?mute`);
+    const captures = await page.evaluate(async (width) => {
+      const rendererPath = "/src/renderer.ts";
+      const windingPath = "/src/winding.ts";
+      const tuningPath = "/src/tuning.ts";
+      const { computeLayout, createRendererState, drawScene } = await import(rendererPath);
+      const { createWindingEngine } = await import(windingPath);
+      const tuning = await import(tuningPath);
+      const engine = createWindingEngine({
+        onGrab() {}, onContact() {}, onAccepted() {}, onCommitted() {}, onCancelled() {},
+      });
+      engine.tick(0);
+      const state = createRendererState();
+      const capture = (width: number, height: number, qualityLevel: number, rendererState = state) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas 2Dがない");
+        const particles: { x: number; y: number; radius: number }[] = [];
+        let lastArc: { x: number; y: number; radius: number } | null = null;
+        const arc = ctx.arc.bind(ctx);
+        ctx.arc = (x, y, radius, start, end, counterclockwise) => {
+          lastArc = { x, y, radius };
+          arc(x, y, radius, start, end, counterclockwise);
+        };
+        const fill = ctx.fill.bind(ctx);
+        ctx.fill = () => {
+          if (ctx.fillStyle === tuning.PALETTE_PARTICLE.toLowerCase() && lastArc) particles.push(lastArc);
+          fill();
+        };
+        // 粒子以外のフレーム依存フェードを比較へ混ぜない。
+        rendererState.guideAlpha = 0;
+        drawScene(ctx, rendererState, {
+          snapshot: engine.snapshot(), nowMs: 0, width, height, qualityLevel, amp: 0, introHiddenAtMs: null,
+        });
+        const { cx, cy } = computeLayout(width, height);
+        const spread = Math.min(width, height) * 0.62;
+        return {
+          particles,
+          normalizedRadii: particles.map(({ x, y }) => Math.hypot(x - cx, y - cy) / spread),
+          storedRadii: rendererState.particles.map((particle: { baseRadius: number }) => particle.baseRadius),
+          png: canvas.toDataURL("image/png"), width, height, qualityLevel,
+        };
+      };
+      const height = width === 375 ? 812 : 800;
+      return {
+        initial: capture(width, height, 0),
+        resized: capture(height, width, 0),
+        enlarged: capture(width * 1.5, height * 1.5, 0),
+        reduced: capture(width, height, 1),
+        lowest: capture(width, height, 2),
+        restored: capture(width, height, 0),
+        fresh: capture(width, height, 0, createRendererState()),
+      };
+    }, width);
+    const dir = process.env.RENDERER_EVIDENCE_DIR;
+    if (dir) {
+      await mkdir(dir, { recursive: true });
+      const measurements = {};
+      for (const [name, { png, ...measurement }] of Object.entries(captures)) {
+        await writeFile(`${dir}/particles-${name}-${width}.png`, Buffer.from(png.split(",")[1], "base64"));
+        measurements[name] = measurement;
+      }
+      await writeFile(`${dir}/particles-${width}.json`, JSON.stringify(measurements, null, 2));
+    }
+    return captures;
+  } finally {
+    await page.close();
+  }
+}
+
+for (const width of [375, 1280]) {
+  test(`${width}px: 初期粒子は正規化半径で保持し実Canvasの奥行き空間へ散布する`, async () => {
+    const { initial } = await renderParticles(width);
+    assert.equal(initial.particles.length, 180);
+    assert.ok(initial.storedRadii.every((radius) => radius >= 0 && radius <= 1));
+    assert.ok(Math.max(...initial.normalizedRadii) > 0.95, "中心1pxではなくspread全域に届く");
+    assert.ok(initial.normalizedRadii.filter((radius) => radius > 0.5).length > 100);
+    initial.normalizedRadii.forEach((radius, i) => assert.ok(Math.abs(radius - initial.storedRadii[i]) < 1e-12));
+  });
+
+  test(`${width}px: resizeと品質増減の後も初期散布と同じ正規化単位・分布を保つ`, async () => {
+    const captures = await renderParticles(width);
+    for (const name of ["resized", "enlarged", "reduced", "lowest", "restored"] as const) {
+      const capture = captures[name];
+      assert.deepEqual(capture.storedRadii, captures.initial.storedRadii.slice(0, capture.particles.length));
+      capture.normalizedRadii.forEach((radius, i) => {
+        assert.ok(Math.abs(radius - captures.initial.storedRadii[i]) < 1e-12, `${name}: 同じ比率で配置する`);
+      });
+    }
+    assert.equal(captures.reduced.particles.length, 100);
+    assert.equal(captures.lowest.particles.length, 50);
+    assert.equal(captures.restored.particles.length, 180);
+    assert.deepEqual(captures.restored.particles, captures.fresh.particles, "復元時に既存粒子の複製を重ねない");
+    assert.equal(captures.restored.png, captures.fresh.png);
+  });
+}
+
+async function renderBeats(width: number) {
+  const height = width === 375 ? 812 : 800;
+  const page = await browser.newPage({ viewport: { width, height } });
+  try {
+    await page.goto(`${baseUrl}?mute`);
+    const captures = await page.evaluate(async ({ width, height }) => {
+      const rendererPath = "/src/renderer.ts";
+      const windingPath = "/src/winding.ts";
+      const tuningPath = "/src/tuning.ts";
+      const { computeLayout, createRendererState, drawScene } = await import(rendererPath);
+      const { createWindingEngine } = await import(windingPath);
+      const tuning = await import(tuningPath);
+      const geometry = computeLayout(width, height);
+      const engine = createWindingEngine({
+        onGrab() {}, onContact() {}, onAccepted() {}, onCommitted() {}, onCancelled() {},
+      });
+      // 起動のperformance原点を0にせず、sceneTimeMsとの差を必ず発生させる。
+      engine.tick(4321.25);
+      engine.introTap(geometry.cx, geometry.cy, 4400, geometry);
+      const start = 4512.5;
+      const point = (angle: number, timeMs: number) => ({
+        pointerId: 1, timeMs,
+        x: geometry.cx + geometry.radius * Math.cos(angle),
+        y: geometry.cy + geometry.radius * Math.sin(angle),
+      });
+      engine.tick(start);
+      engine.pointerDown(point(tuning.START_ANGLE, start), geometry);
+      const capture = (snapshot: WindingSnapshot, nowMs: number) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas 2Dがない");
+        const ticks: { x: number; y: number; radius: number }[] = [];
+        let move = { x: 0, y: 0 };
+        const moveTo = ctx.moveTo.bind(ctx);
+        ctx.moveTo = (x, y) => { move = { x, y }; moveTo(x, y); };
+        const stroke = ctx.stroke.bind(ctx);
+        ctx.stroke = () => {
+          if (ctx.strokeStyle === tuning.PALETTE_TICK.toLowerCase() && ctx.lineWidth === tuning.TICK_WIDTH_PX && ctx.lineCap === "butt") {
+            ticks.push({ ...move, radius: Math.hypot(move.x - geometry.cx, move.y - geometry.cy) });
+          }
+          stroke();
+        };
+        const state = createRendererState();
+        state.guideAlpha = 0;
+        drawScene(ctx, state, { snapshot, nowMs, width, height, qualityLevel: 0, amp: 0, introHiddenAtMs: 0 });
+        return {
+          ticks, settlePx: ticks[0].radius - geometry.radius - tuning.TICK_INNER_OFFSET_PX,
+          snapshot, nowMs, png: canvas.toDataURL("image/png"),
+        };
+      };
+      const at = (timeMs: number) => { engine.tick(timeMs); return capture(structuredClone(engine.snapshot()), timeMs); };
+      const beatStart = at(start);
+      const tauMs = at(start + Math.PI * 2);
+      const halfSettle = at(start + 30);
+      const nextBeat = at(start + tuning.EIGHTH_MS);
+      const nextHalfSettle = at(start + tuning.EIGHTH_MS + 30);
+      engine.pointerMove(point(tuning.START_ANGLE, start + 280), geometry);
+      for (let i = 1; i <= 64; i++) {
+        const time = start + 280 + 3200 * i / 64;
+        engine.tick(time);
+        engine.pointerMove(point(tuning.START_ANGLE + Math.PI * 2 * i / 64, time), geometry);
+      }
+      const accepted: WindingSnapshot = structuredClone(engine.snapshot());
+      if (accepted.state !== "aligning") throw new Error("有効一周の前提が壊れている");
+      const beforeFreeze = at(accepted.freezeAtMs - 1);
+      const frozenStart = at(accepted.freezeAtMs);
+      const frozenEnd = at(accepted.closeAtMs - 0.01);
+      const closed = at(accepted.closeAtMs);
+      const afterClose = at(accepted.closeAtMs + 30);
+      const afterNextBeat = at(accepted.closeAtMs + tuning.EIGHTH_MS);
+      const afterNextHalfSettle = at(accepted.closeAtMs + tuning.EIGHTH_MS + 30);
+      engine.pointerUp({ pointerId: 1, timeMs: accepted.closeAtMs + 280 });
+      at(accepted.closeAtMs + 1000);
+      const secondStart = accepted.closeAtMs + 1037.25;
+      engine.tick(secondStart);
+      engine.pointerDown(point(engine.snapshot().tipAngle, secondStart), geometry);
+      const secondGrab = at(secondStart);
+      const secondHalfSettle = at(secondStart + 30);
+      return {
+        beatStart, tauMs, halfSettle, nextBeat, nextHalfSettle, beforeFreeze,
+        frozenStart, frozenEnd, closed, afterClose, afterNextBeat, afterNextHalfSettle,
+        secondGrab, secondHalfSettle,
+      };
+    }, { width, height });
+    const dir = process.env.RENDERER_EVIDENCE_DIR;
+    if (dir) {
+      await mkdir(dir, { recursive: true });
+      const measurements = {};
+      for (const [name, { png, ...measurement }] of Object.entries(captures)) {
+        await writeFile(`${dir}/beats-${name}-${width}.png`, Buffer.from(png.split(",")[1], "base64"));
+        measurements[name] = measurement;
+      }
+      await writeFile(`${dir}/beats-${width}.json`, JSON.stringify(measurements, null, 2));
+    }
+    return captures;
+  } finally {
+    await page.close();
+  }
+}
+
+for (const width of [375, 1280]) {
+  test(`${width}px: 目盛りは250msで同位相になり2πmsでは戻らない`, async () => {
+    const captures = await renderBeats(width);
+    for (const capture of Object.values(captures)) assert.ok(capture.ticks.length >= 23);
+    assert.ok(Math.abs(captures.beatStart.settlePx) < 1e-10, "performance原点の拍開始で沈み量0");
+    assert.deepEqual(captures.beatStart.ticks, captures.nextBeat.ticks);
+    assert.ok(captures.tauMs.settlePx > 0.1, "角度剰余の2πms周期に戻らない");
+    assert.ok(Math.abs(captures.halfSettle.settlePx - 0.875) < 1e-10, "30/60msのease-outで0.875px");
+    assert.deepEqual(captures.halfSettle.ticks, captures.nextHalfSettle.ticks);
+  });
+
+  test(`${width}px: 非0原点と140ms停止の前後でも音側の250msグリッドへ同期する`, async () => {
+    const captures = await renderBeats(width);
+    const frozen = captures.frozenStart.snapshot;
+    assert.equal(frozen.state, "hitstop");
+    assert.equal(frozen.closeAtMs - frozen.freezeAtMs, 140, "論理予約140ms。rAFの観測フレーム差とは別");
+    assert.equal(frozen.sceneTimeMs, captures.frozenEnd.snapshot.sceneTimeMs);
+    assert.deepEqual(captures.frozenStart.ticks, captures.frozenEnd.ticks);
+    assert.equal(captures.closed.snapshot.state, "closing");
+    assert.ok(captures.closed.nowMs - captures.closed.snapshot.sceneTimeMs > captures.beatStart.nowMs - captures.beatStart.snapshot.sceneTimeMs + 139);
+    assert.equal((frozen.closeAtMs - frozen.beatOriginMs) % 250, 0, "閉鎖は音側と同じ拍原点のグリッド");
+    assert.ok(Math.abs(captures.closed.settlePx) < 1e-10, "停止で場の時計が遅れても閉鎖拍で0へ戻る");
+    assert.ok(Math.abs(captures.afterClose.settlePx - 0.875) < 1e-10);
+    assert.deepEqual(captures.closed.ticks, captures.afterNextBeat.ticks);
+    assert.deepEqual(captures.afterClose.ticks, captures.afterNextHalfSettle.ticks);
+    assert.equal(captures.secondGrab.snapshot.state, "winding");
+    assert.ok(captures.secondGrab.snapshot.beatOriginMs > frozen.beatOriginMs);
+    assert.ok(Math.abs(captures.secondGrab.settlePx) < 1e-10, "次の掴みも新しいperformance原点に従う");
+    assert.ok(Math.abs(captures.secondHalfSettle.settlePx - 0.875) < 1e-10);
+  });
+}
+
 // Canvasへ渡した本体ベジェを細分し、画面内に見える弧長だけを積算する。
 function visibleSlackLength(capture: { strokes: { color: string; path: { op: string; args: number[] }[] }[] }, width: number): number {
   const height = width === 375 ? 812 : 800;
