@@ -40,10 +40,22 @@
 - ハーネス実測: `pnpm exec tsc --noEmit`（exit 0）、`node --experimental-strip-types --test tests/winding.test.ts`（25 pass / 0 fail）、`pnpm build`（exit 0）、`pnpm check`（pass 5作品）、`pnpm verify abyss-winder`（pass: console 0 / 404 0、mouse maxAmp 0.0633、touch maxAmp 0.0612、横スクロールなし、meanDrawMs 1280=1.67 / 375=1.19）。`node --test scripts/tests/work-json.test.mjs` は 75 pass / 1 fail（Phase 0 で記録済みの既存固定期待値。範囲外のため触らない）。
 - カード制約との衝突を lead へ記録: 本番コードは「最大3コードファイル（main/tuning/renderer）」に対し、テストから参照可能にするため判定を独立ファイル `src/winding.ts` に置いた（4枚目）。architecture §2 が「円周判定の回帰テストは作品内 tests/winding.test.ts を正本に追加」（テストは3枚とは別）と定める一方、`tests/` から `src/main.ts` を import すると p5 が DOM を要求して Node の `--test` が実行不能のため、分離が必須だった。黙って省略せず明記する。
 
-## Phase 2: 完成作品の検証（未着手）
+## Phase 1-2: 音響同期と仕上げ（実装2 ─ 完了）
 
-`pnpm verify abyss-winder`、専用の連続円周・キャンセル・多pointer・時刻同期テスト、実画面の見た目判定は後続。雛形のビルド成功は作品体験の完成を意味しない。root/作品にlint/test/typecheck scriptは未定義で、直接tscを実行する。
+- 音響契約（architecture §7）を `src/audio/engine.ts` に追加した: `WindingCue`、`ClosureTimeline`（winding.ts から再エクスポートし、共通時刻契約の型を二重定義しない）、`winding()` / `planClosure()` / `cancelClosure()` / `suspend()`。`NoopAudioEngine` の `planClosure` は winding.ts の `planClosureTimes` と同じ論理時計を返し、mute・AudioContext 非対応でも視覚の予定が壊れない。
+- `src/audio/synth-engine.ts` を雛形から全面書き換え（§8 どおり）: 濡れた索の摩擦（noise → bandpass、速度でゲイン平滑。dry のみで残響に送らないため freeze で尾を残さない）、金属の爪（正弦非整数倍音 1 / 2.37 / 3.61 + 短い高域ノイズ。速度で 60→20ms）、木箱の胴（92 / 138Hz の共鳴 2 本 + 低域ノイズ励振、160ms）、青いベル（A5 基音 880Hz + 控えめな非整数倍音、余韻 550ms）。閉鎖はクリック・木胴・ベルを同じ context 時刻に同時予約する。
+- 拍の進行は winding cue 駆動（draw で 1 フレーム 1 回以下、lookahead 50ms 以内）。巻き途中は 8 分拍ごとに A5→A2 をドリアン度数で 22 段下降し、下端以降は無音程の爪だけを続ける。過去の拍を連続再生しない（拍ポインタを現在へ進める）。位置を横移動しただけで音階が上昇する雛形ロジックは持ち込まない（接触音は BASE_MIDI 固定）。
+- 共通時刻契約の接続: main の `onAccepted` は `timeline.closeAtMs - HITSTOP_MS`（= freezeAtMs。planClosureTimes の式の不動点）を渡すため、音側の戻りは winding.ts の pendingTimeline と厳密に一致する。ズレれば `?debug` の lastError に出る。freeze の摩擦消音（最大 5ms ランプを停止区間の内側）と閉鎖音の予約は音側の時計で行い、main は 140ms の別 timer を足さない。
+- 取消と安全性: `onCancelled` で未発音の閉鎖音（cancelClosure・冪等）と同 gesture の摩擦・未発音拍を消す。非表示では `audio.suspend()` で未来予約を破棄し、拍ポインタを現在へ進めて復帰後の過去音バーストを防ぐ。voice group 上限 24（古い予約から破棄）、compressor（リミッタ役 threshold -10 / ratio 12）で音割れを防ぐ。音量の序列は接触音 < 拍爪 < 閉鎖音。resume 完了を待たない配線と pointerup / touchend / click / keydown の常駐解錠は雛形から維持。
+- サムネイルは実画面（2 輪閉鎖の蓄積・閉鎖輪の発光ピーク付近）から `canvas.toDataURL()` で撮影し `--cover 1200x630` で webp 化した。ピクセル解析: 平均輝度 20.7（暗い背景を維持）、白飛び 0、青系 1237 px（輪と発光が写る）。錆茶のピクセルは索そのものであり濁った背景ではない。画像は発注 0 枚で生成せず、`generatedImages` は 0 のまま。
+- 専用円周入力のハーネス実測（headless Chromium で円周一周のドラッグをマウス合成で 2 連続実施）: 巻き取り中の実振幅 maxAmp 0.0134 / 0.0135（摩擦 + 拍爪）、閉鎖時 0.0542 / 0.0427（クリック・木胴・ベル。接触音 0.005 より大きい）、閉鎖予定の plannedToken 1・2 を確認、console / pageerror 0、各閉鎖後に idle へ復帰。1 周目の settle 完了前の down は winding.ts が無視する仕様どおりで、検証ハーネス側は idle 復帰を待つ。verify の短いなぞり（mouse maxAmp 0.0050 / touch 0.0044）は接触音をベル風 1.2 秒から短い爪へ変えたため前段より小さいが、しきい値は満たす。
+- 実装1と同じく判定と描画は触らない（winding.ts / renderer.ts / tuning.ts / music.ts / quality.ts は変更なし）。今回の変更コードは engine.ts・synth-engine.ts・main.ts の 3 枚（カード制約どおり）。中央案内 copy の writer 確定は来ておらず雛形文言のまま（デザイン must-fix は後続へ引き継ぐ）。
 
-## Phase 3: 公開（未着手）
+## Phase 2: 完成作品の検証（完了）
+
+- `pnpm exec tsc --noEmit`（exit 0）、`node --experimental-strip-types --test tests/winding.test.ts`（25 pass / 0 fail）、`pnpm build`（exit 0。500kB 超チャンク警告は既存テンプレート由来で残る）、`pnpm check`（pass 5作品）、`pnpm verify abyss-winder`（pass: console 0 / 404 0、mouse-sound maxAmp 0.0050、touch-sound maxAmp 0.0044、横スクロールなし、meanDrawMs 1280=1.15 / 375=1.04）。
+- 実タッチ・実機での 140ms 停止の音視覚同期の実測（architecture §11-3 の専用検証）は後続の独立検証担当の領分として残す。ハーネス上の音響動作の実測は上の Phase 1-2 の記録どおり。
+
+## Phase 3: 公開（進行中）
 
 構想の成果をmain baseのdraft PRへ載せるまでが本段階。独立検証・レビューと統合判断の後、mergeは人間に委ねる。本番deployは実行しない。
