@@ -14,7 +14,7 @@
 import P5 from "p5";
 import "./style.css";
 
-import { createAudioEngine } from "./audio/engine";
+import { createAudioEngine, type SequencePlan, type StarStep } from "./audio/engine";
 import { createFrameCounter, installArtHook } from "./art-hook";
 import { noteForPosition } from "./music";
 import { QualityController } from "./quality";
@@ -50,7 +50,6 @@ import {
   EDGE_MARGIN_PX,
   FADE_CURVE_EXP,
   FADE_MS,
-  FIRST_NOTE_DELAY_MS,
   FOLLOW_DT_MAX_MS,
   FOLLOW_TAU_MS,
   GOLDEN_RATIO,
@@ -103,41 +102,14 @@ import {
   STAR_HALO_IDLE_MAX_PX,
   STAR_HALO_IDLE_MIN_PX,
   STAR_POOL_SIZE,
-  STEP_MS,
   WAITING_HALO_SCALE,
 } from "./tuning";
 
 // ============================================================
-// 正本 §5 の音響契約のデータ型。実装 2（音響カード）が engine.ts 側へ
-// 移すまでの置き場所。main はこれを planSequence() に一度だけ渡す。
+// 正本 §5 の音響契約のデータ型（StarStep / SequencePlan / SequenceClock）は
+// audio/engine.ts へ移した。main は createAudioEngine() の戻り値
+// （StarAudioEngine）越しにだけ音響へ触る。
 // ============================================================
-
-/** 星列の 1 ステップ。線の確定順と同一順序・同一時刻で 1 星 1 音に使える */
-interface StarStep {
-  readonly starId: number;
-  /** 0..1（画面幅で正規化） */
-  readonly x: number;
-  /** 0..1（画面高さで正規化） */
-  readonly y: number;
-  readonly midi: number;
-  /** 0..1 の強さ */
-  readonly velocity: number;
-}
-
-interface SequencePlan {
-  /** pointerId とは別の単調増加 ID */
-  readonly id: number;
-  /** 3..12。確定した線と同じ順 */
-  readonly steps: readonly StarStep[];
-  readonly releasedAtMs: number;
-}
-
-interface SequenceClock {
-  readonly mode: "pending" | "audio" | "visual";
-  /** pending のみ null（音声の解錠待ち。星と線は先走らない） */
-  readonly firstAtMs: number | null;
-  readonly stepMs: number;
-}
 
 type WorkState =
   | "intro"
@@ -219,7 +191,8 @@ interface Constellation {
   /** 確定順（最上部始点・時計回り）の音響用データ。音側へ渡したら更新しない */
   steps: readonly StarStep[];
   releasedAtMs: number;
-  clock: SequenceClock;
+  /** 到達増光を設定済みの clock.firstAtMs。pending→audio の切替検出用（-1 は未確定） */
+  brightenSetForMs: number;
 }
 
 interface StarView {
@@ -593,19 +566,24 @@ function releaseSession(session: FingerSession, nowMs: number, width: number, he
     velocity: 1,
   }));
   const plan: SequencePlan = { id: nextSequenceId++, steps, releasedAtMs: nowMs };
-  const clock = planSequence(plan);
-  const firstAt = clock.firstAtMs;
+  // release ごとに一度だけ音響へ渡す（正本 §4・§5）。1 星 1 音はこの steps の順に鳴る
+  audio.planSequence(plan);
+  const clock = audio.getSequenceClock(plan.id);
+  const firstAt = clock !== null && clock.firstAtMs !== null ? clock.firstAtMs : null;
+  const stepMs = clock !== null ? clock.stepMs : 0;
   order.forEach((star, index) => {
     star.owner = "constellation";
     star.ownerId = plan.id;
-    star.brightenAtMs = firstAt === null ? -1 : firstAt + index * clock.stepMs;
+    star.brightenAtMs = firstAt === null ? -1 : firstAt + index * stepMs;
     star.returnStartMs = -1;
   });
-  constellations.push({ id: plan.id, steps, releasedAtMs: nowMs, clock });
+  constellations.push({ id: plan.id, steps, releasedAtMs: nowMs, brightenSetForMs: firstAt ?? -1 });
   // 解放済み星座は最大 4 個。5 個目の解放で最古の星座を終了し所有を返す（正本 §3）
   while (constellations.length > MAX_CONSTELLATIONS) {
     const oldest = constellations.shift();
     if (oldest) {
+      // 置換した列の予約・音源も解放する（正本 §3・§5）
+      audio.cancelSequence(oldest.id);
       for (const step of oldest.steps) returnConstellationStar(stars[step.starId], nowMs);
       replacementCount++;
     }
@@ -663,37 +641,30 @@ function releaseAll(nowMs: number): void {
 // ============================================================
 // 音響への接点（正本 §4・§5）
 // ============================================================
-// 解放ごとに SequencePlan を一度だけ組み立てて clock を返す単一の境界。
-// steps は線の確定順と同一順序・同一時刻で 1 星 1 音（starId・位置・midi・velocity）
-// を持つため、音響カードは plan を受け取るだけで線イベントと同じ順序で鳴らせる。
+// 解放ごとに SequencePlan を一度だけ audio.planSequence() へ渡す。
+// steps は線の確定順と同一順序・同一時刻（starId・位置・midi・velocity）を
+// 持つため、1 星 1 音が線イベントと同じ順序・同じ時刻で鳴る。
 //
-// 実装 1（このカード）では音響未実装のため視覚時計で進める。これは正本 §4 の
-// mute / 音声非対応と同じ経路で、順序と寿命は音つきの場合と同じである。
-// 実装 2（音響カード）はここへ StarAudioEngine.planSequence / getSequenceClock を
-// 差し込み、pending → audio の切替は getSequenceClock(id) を毎フレーム読み直す形
-// に置き換える（main 側に古い pending のコピーを保存しない。正本 §5）。
-// pending に変わったときは星座の phase が waiting になり、星は微光待機・
-// 増光も線も先走らない（この状態の描画は既に実装済み）。
-function planSequence(plan: SequencePlan): SequenceClock {
-  return {
-    mode: "visual",
-    firstAtMs: plan.releasedAtMs + FIRST_NOTE_DELAY_MS,
-    stepMs: STEP_MS,
-  };
-}
+// 時計は main 側にコピーを保存せず、getSequenceClock(id) を毎フレーム読み直す
+// （正本 §5。pending → audio の切替があるため）。pending のとき firstAtMs は
+// null で、星座の phase は waiting になり星は微光待機・増光も線も先走らない。
+// running になった時点で音響側が起点を新たに確定し、絵も同じ clock へ揃う。
 
 // ============================================================
 // 状態の算出
 // ============================================================
 
 function lastNoteAtMs(constellation: Constellation): number {
-  const firstAt = constellation.clock.firstAtMs;
-  if (firstAt === null) return 0;
-  return firstAt + (constellation.steps.length - 1) * constellation.clock.stepMs;
+  // clock は main 側に保存せず毎フレーム engine から読み直す（正本 §5）
+  const clock = audio.getSequenceClock(constellation.id);
+  if (!clock || clock.firstAtMs === null) return 0;
+  return clock.firstAtMs + (constellation.steps.length - 1) * clock.stepMs;
 }
 
 function constellationPhase(constellation: Constellation, nowMs: number): ConstellationPhase {
-  if (constellation.clock.firstAtMs === null) return "waiting";
+  const clock = audio.getSequenceClock(constellation.id);
+  if (!clock) return "expired"; // 音響側に無い列（置換・suspend 済み）は静かに終わらせる
+  if (clock.firstAtMs === null) return "waiting";
   const lastAt = lastNoteAtMs(constellation);
   if (nowMs < lastAt) return "linking";
   if (nowMs < lastAt + HOLD_MS) return "holding";
@@ -853,9 +824,9 @@ function drawStar(ctx: CanvasRenderingContext2D, view: StarView): void {
 function drawConstellationLines(ctx: CanvasRenderingContext2D, nowMs: number, phases: Map<number, ConstellationPhase>): void {
   for (const constellation of constellations) {
     const phase = phases.get(constellation.id) ?? "expired";
-    const firstAt = constellation.clock.firstAtMs;
-    if (phase === "waiting" || phase === "returning" || firstAt === null) continue;
-    const stepMs = constellation.clock.stepMs;
+    const clock = audio.getSequenceClock(constellation.id);
+    if (phase === "waiting" || phase === "returning" || clock === null || clock.firstAtMs === null) continue;
+    const stepMs = clock.stepMs;
     const lastAt = lastNoteAtMs(constellation);
     let globalScale = 1;
     if (phase === "fading") {
@@ -879,7 +850,7 @@ function drawConstellationLines(ctx: CanvasRenderingContext2D, nowMs: number, ph
       ctx.beginPath();
       let any = false;
       for (let index = 1; index < points.length; index++) {
-        const progress = clamp01((nowMs - (firstAt + (index - 1) * stepMs)) / stepMs);
+        const progress = clamp01((nowMs - (clock.firstAtMs + (index - 1) * stepMs)) / stepMs);
         if (progress <= 0) break;
         const from = points[index - 1];
         const to = points[index];
@@ -940,6 +911,18 @@ function updateSessions(dtMs: number, nowMs: number, width: number, height: numb
 }
 
 function updateConstellations(nowMs: number): void {
+  // pending だった列が audio 時計に変わったら、到達増光を音と同じ時刻へ設定する
+  // （正本 §4・§5。時計のコピーは保存せず毎フレーム読み直す）
+  for (const constellation of constellations) {
+    const clock = audio.getSequenceClock(constellation.id);
+    const firstAt = clock !== null && clock.firstAtMs !== null ? clock.firstAtMs : -1;
+    const stepMs = clock !== null ? clock.stepMs : 0;
+    if (constellation.brightenSetForMs === firstAt) continue;
+    constellation.brightenSetForMs = firstAt;
+    for (const [index, step] of constellation.steps.entries()) {
+      stars[step.starId].brightenAtMs = firstAt < 0 || clock === null ? -1 : firstAt + index * stepMs;
+    }
+  }
   // returning 中の星の位置を cubic-out で元の空の位置へ戻す（design.md 第11章）
   for (const constellation of constellations) {
     if (constellationPhase(constellation, nowMs) !== "returning") continue;
@@ -1089,7 +1072,8 @@ instance = new P5((p: P5) => {
     const interrupt = (): void => {
       pageHidden = true;
       releaseAll(performance.now());
-      // 音響側の全予約の破棄と消音は実装 2（音響カード）がこの位置へ接続する（正本 §3）
+      // 全予約の破棄・30ms 消音・残響も切る（正本 §3 の状態表）。復帰後に古い音を再生しない
+      audio.suspend();
     };
 
     const onVisibilityChange = (): void => {
@@ -1241,5 +1225,7 @@ if (import.meta.hot) {
     disposers.length = 0;
     instance?.remove();
     instance = null;
+    // context と常駐リスナーも解除する（正本 §5。HMR 再初期化時に重複を残さない）
+    audio.dispose();
   });
 }

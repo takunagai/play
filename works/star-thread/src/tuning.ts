@@ -137,6 +137,23 @@ export const BG_STAR_TWINKLE_MAX_MS = 7000;
 /** 音声 suspended 中の微光待機（正本 §3 の採用値） */
 export const WAITING_HALO_SCALE = 0.7;
 
+// ---- 音響ノブ（正本 §6・§7 の表。engine.ts のオルゴール音源が読む） ----
+export const MAX_VOICES = 48;
+export const NOTE_ATTACK_MS = 8;
+export const NOTE_DECAY_MS = 900;
+export const AUDIO_MASTER_GAIN = 0.35;
+export const AUDIO_VOICE_PEAK = 0.06;
+export const AUDIO_REVERB_TAIL_S = 1.2;
+export const AUDIO_REVERB_WET = 0.18;
+/** cancel / background での消音時間（正本 §3 の状態表「音源を 30ms で消音」） */
+export const AUDIO_SUSPEND_FADE_MS = 30;
+/** オルゴールの倍音比 基音:2倍音:3倍音 = 1:0.18:0.06（正本 §6。鋭い click・ノイズ源なし） */
+export const AUDIO_PARTIALS: ReadonlyArray<readonly [number, number]> = [
+  [1, 1],
+  [2, 0.18],
+  [3, 0.06],
+];
+
 // ---- 画質の自動調整（quality.ts。design.md 第14章の軽量化の対象のみを足す） ----
 export const QUALITY_WINDOW_MS = 2000;
 export const QUALITY_WARMUP_MS = 3000;
