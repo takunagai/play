@@ -1,0 +1,15 @@
+{
+  "slug": "star-thread",
+  "title": "星を結ぶ夜",
+  "date": "2026-11-06",
+  "origin": "autopilot",
+  "summary": "長押しで星を集め、離すと星座が結ばれてオルゴールが鳴る",
+  "emotion": "驚き・発見",
+  "verb": "引き寄せと反発",
+  "tone": "ダーク＋ネオン",
+  "sound": "アコースティック風",
+  "scale": "メジャーペンタ",
+  "thumbnail": "thumbnail.webp",
+  "license": "MIT",
+  "generatedImages": []
+}
