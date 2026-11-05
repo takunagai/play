@@ -1,10 +1,12 @@
 /* ============================================================
    style.css ─ レイヤー構成と導入画面のグローバルスタイル
+   導入画面は文字・薄幕なしの全面ヒット領域（design.md 第10章の
+   非言語の誘い）。操作説明は別の場所へ移さず、非表示にする。
    ============================================================ */
 
 :root {
-  --palette-base: #07070d;
-  --palette-text: #f4f2ff;
+  --palette-base: #0b1026;
+  --palette-text: #fff3d6;
   color-scheme: dark;
 }
 
@@ -52,6 +54,8 @@ body {
   display: block;
 }
 
+/* 導入画面: 薄幕を撤去して星空をそのまま見せ、全面の透明なヒット領域として残す。
+   cursor と退場の opacity 遷移（0.5s）は維持する（design.md 第10章） */
 #gate {
   position: fixed;
   inset: 0;
@@ -63,7 +67,7 @@ body {
   gap: 12px;
   padding: 24px;
   text-align: center;
-  background: rgba(7, 7, 13, 0.35);
+  background: transparent;
   transition: opacity 0.5s ease;
   cursor: pointer;
 }
@@ -73,19 +77,11 @@ body {
   pointer-events: none;
 }
 
-#gate-title {
-  margin: 0;
-  font-size: clamp(2.25rem, 9vw, 4.5rem);
-  font-weight: bold;
-  line-height: 1.1;
-  animation: gate-rise 0.9s ease both;
-}
-
+/* 操作説明の文字は使わない（非言語の誘い）。要素は index.html に残すが、
+   この作品の表示対象外のためここで非表示にする */
+#gate-title,
 #gate-text {
-  margin: 0;
-  font-size: clamp(1rem, 3.6vw, 1.25rem);
-  opacity: 0.85;
-  animation: gate-rise 0.9s 0.3s ease both;
+  display: none;
 }
 
 #debug-overlay {
@@ -108,22 +104,4 @@ body {
 
 #debug-overlay[hidden] {
   display: none;
-}
-
-@keyframes gate-rise {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #gate-title,
-  #gate-text {
-    animation: none;
-  }
 }
