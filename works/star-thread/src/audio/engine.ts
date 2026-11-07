@@ -128,6 +128,8 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
   /** 未終了の voice。予約済み（未開始）も上限に含める（正本 §5） */
   private readonly voices = new Set<VoiceHandle>();
   private readonly unlockRemovers: Array<() => void> = [];
+  /** 解錠リスナーの二重登録防止。dispose で解除して再初期化に備える */
+  private unlockInstalled = false;
 
   get isReady(): boolean {
     return this.isWired;
@@ -149,7 +151,11 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
     try {
       this.wire(context);
     } catch (error: unknown) {
+      // 配線失敗時も context は作成済み。残留させると解錠リスナーの無い suspended
+      // context が残り、列が pending のまま waiting に固定される（正本 §3・§4 の
+      // 状態表「start 失敗」）。ここで冪等に回収し、以後の列を視覚時計へ退避させる
       this.lastError = error instanceof Error ? error.message : String(error);
+      this.recoverUnwiredContext(context);
       return; // 視覚は visualClock へ退避して続く（正本 §4 の状態表）
     }
     this.installUnlockListeners();
@@ -158,6 +164,17 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
       if (context.state === "running") this.schedulePendingSequences();
     };
     this.unlock();
+  }
+
+  /** 配線に失敗した作成済み context と field を冪等に巻き戻す（close の二重呼び出しも安全） */
+  private recoverUnwiredContext(context: AudioContext): void {
+    if (this.context === context) this.context = null;
+    this.fxIn = null;
+    this.master = null;
+    this.analyser = null;
+    this.analyserBuffer = null;
+    this.isWired = false;
+    context.close().catch(() => {});
   }
 
   private unlock(): void {
@@ -211,6 +228,8 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
 
   /** pointerup / touchend / click / keydown の常駐解錠（正本 §5）。dispose で解除する */
   private installUnlockListeners(): void {
+    if (this.unlockInstalled) return; // 再試行でも二重登録しない（dispose 後は解除済みで再設置できる）
+    this.unlockInstalled = true;
     const unlock = (): void => this.unlock();
     for (const type of ["pointerup", "touchend", "click", "keydown"]) {
       window.addEventListener(type, unlock, { passive: true });
@@ -281,6 +300,7 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
   dispose(): void {
     for (const remove of this.unlockRemovers) remove();
     this.unlockRemovers.length = 0;
+    this.unlockInstalled = false;
     this.suspend();
     const context = this.context;
     this.context = null;
@@ -296,7 +316,11 @@ export class MusicBoxAudioEngine implements StarAudioEngine {
   private schedulePendingSequences(): void {
     if (document.visibilityState !== "visible") return;
     for (const sequence of this.sequences.values()) {
-      if (sequence.state === "pending") this.scheduleSequence(sequence, performance.now());
+      // 視覚時計へ退避済みの列は再配線しない（start 失敗→再試行の成功時に時計を
+      // 二重に更新して寿命を巻き戻さない。正本 §4「同じ順序と寿命を維持」）
+      if (sequence.state === "pending" && sequence.clock.mode !== "visual") {
+        this.scheduleSequence(sequence, performance.now());
+      }
     }
   }
 
