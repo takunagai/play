@@ -314,7 +314,7 @@ function buildHaloSprite(): HTMLCanvasElement {
 // 状態
 // ============================================================
 
-const audio = createAudioEngine();
+let audio = createAudioEngine();
 const quality = new QualityController(HALO_LAYER_STEPS.length);
 const frameCounter = createFrameCounter();
 
@@ -342,6 +342,8 @@ let lastAmp = 0;
 let lastError = "";
 let previousWidth = 0;
 let previousHeight = 0;
+/** pagehide / HMR dispose で冪等に終了したか。pageshow(persisted) の再初期化条件 */
+let disposed = false;
 
 /** 星図の seed。resize で再写像するので初期生成だけに使う */
 const STAR_SEED = 0x5eed;
@@ -997,7 +999,8 @@ function renderDebugOverlay(nowMs: number): void {
 
 const disposers: Array<() => void> = [];
 
-instance = new P5((p: P5) => {
+/** sketch の本体。初回起動と pageshow(persisted) 復帰（initAll）の両方で使う */
+const sketch = (p: P5): void => {
   p.setup = () => {
     const canvas = p.createCanvas(window.innerWidth, window.innerHeight);
     canvas.parent(hostEl);
@@ -1068,17 +1071,31 @@ instance = new P5((p: P5) => {
       cancelSession(session, performance.now());
     };
 
-    /** hidden / blur / pagehide 共通。所有を解放して描画を休止する */
+    // p5-shim.d.ts は使う面の最小宣言で loop 制御を含まない。実在するメソッド
+    // （p5 2.3.3 dist/core/structure.js の fn.noLoop / fn.loop）にだけ窄めて補う
+    const loopControl = p as P5 & { noLoop(): void; loop(): void };
+
+    /** hidden / blur。所有を解放し、p5 の rAF 連鎖を実際に止める（正本 §3 の状態表）。
+     *  draw の早期 return だけでは rAF が生き続けるため noLoop() まで呼ぶ */
     const interrupt = (): void => {
+      if (disposed) return;
       pageHidden = true;
       releaseAll(performance.now());
       // 全予約の破棄・30ms 消音・残響も切る（正本 §3 の状態表）。復帰後に古い音を再生しない
       audio.suspend();
+      loopControl.noLoop();
+    };
+
+    /** visible / focus 復帰。idle・単一 rAF・過去音なし（正本 §3。loop() は p5 側で冪等） */
+    const resume = (): void => {
+      if (disposed) return;
+      pageHidden = false;
+      loopControl.loop();
     };
 
     const onVisibilityChange = (): void => {
       if (document.visibilityState === "hidden") interrupt();
-      else pageHidden = false; // visible 復帰は idle。rAF は p5 が常に一本
+      else resume();
     };
 
     const onResize = (): void => {
@@ -1111,9 +1128,14 @@ instance = new P5((p: P5) => {
           star.y = star.fixedY;
         }
         const { dx, dy } = shiftToKeepMargin(owned, p.width, p.height);
+        // 星芯（x/y）と線端（fixedX/Y）へ同じ dx/dy を適用する（星と線の共通座標の同一更新）。
+        // 帰還中の星は updateConstellations が fixedX/homeX から毎フレーム再計算するため、
+        // fixedX が動れば帰還経路も同じ補正へ同期する
         for (const star of owned) {
           star.fixedX += dx;
           star.fixedY += dy;
+          star.x += dx;
+          star.y += dy;
         }
       }
       previousWidth = p.width;
@@ -1136,13 +1158,9 @@ instance = new P5((p: P5) => {
     disposers.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
     window.addEventListener("blur", interrupt);
     disposers.push(() => window.removeEventListener("blur", interrupt));
-    const onFocus = (): void => {
-      pageHidden = false;
-    };
-    window.addEventListener("focus", onFocus);
-    disposers.push(() => window.removeEventListener("focus", onFocus));
-    window.addEventListener("pagehide", interrupt);
-    disposers.push(() => window.removeEventListener("pagehide", interrupt));
+    window.addEventListener("focus", resume);
+    disposers.push(() => window.removeEventListener("focus", resume));
+    // pagehide はモジュール末尾の teardownAll / pageshow(persisted) 復帰（initAll）が担う（正本 §3）
     const onContextMenu = (event: MouseEvent): void => event.preventDefault();
     window.addEventListener("contextmenu", onContextMenu);
     disposers.push(() => window.removeEventListener("contextmenu", onContextMenu));
@@ -1190,7 +1208,14 @@ instance = new P5((p: P5) => {
     frameCounter.record(performance.now() - drawStartMs);
     if (isDebugMode && p.frameCount % 6 === 0) renderDebugOverlay(nowMs);
   };
-});
+};
+
+/** sketch の生成。initAll（pageshow persisted 復帰）からも呼ぶ */
+function startSketch(): P5 {
+  return new P5(sketch);
+}
+
+instance = startSketch();
 
 /** drawDecoStars は sketch の draw からだけ使う（haloSprite を参照するため） */
 function drawDecoStars(ctx: CanvasRenderingContext2D, nowMs: number, isReducedQuality: boolean): void {
@@ -1217,15 +1242,55 @@ function drawDecoStars(ctx: CanvasRenderingContext2D, nowMs: number, isReducedQu
   }
 }
 
-/** pagehide / HMR dispose（正本 §3 の状態表）。pagehide は所有の解放と描画の休止のみ
- *  （bfcache 復帰を壊さない）。リスナーの解除と p5 の破棄は HMR dispose が担う */
+// ============================================================
+// pagehide / HMR dispose / bfcache 復帰（正本 §3 の状態表の最終行）
+// pagehide と HMR dispose はリスナー・rAF・音響を冪等に終了する。
+// 実 bfcache はヘッドレスでは検証できないため、合成 pageshow(persisted) で
+// 「新規初期化と同じ復帰」だけを検証する
+// ============================================================
+
+/** pagehide / HMR dispose 共通の終了。二度呼ばれても冪等（正本 §3） */
+function teardownAll(): void {
+  if (disposed) return;
+  disposed = true;
+  pageHidden = true; // 以後の描画は休止し、getState は idle を返す
+  releaseAll(performance.now());
+  for (const dispose of disposers) dispose();
+  disposers.length = 0;
+  instance?.remove(); // p5 の rAF 連鎖と canvas を破棄する
+  instance = null;
+  // context と常駐解錠リスナーも解除する（正本 §5。新規初期化時に重複を残さない）
+  audio.dispose();
+}
+
+/** pageshow(persisted) 復帰。teardown 済みのときだけ新規初期化と同じ手順で起こす */
+function initAll(): void {
+  if (!disposed) return;
+  disposed = false;
+  pageHidden = false;
+  isIntro = true;
+  gateEl.classList.remove("is-hidden");
+  sessions.clear();
+  constellations.length = 0;
+  nextSequenceId = 1;
+  replacementCount = 0;
+  lastAmp = 0;
+  lastError = "";
+  audio = createAudioEngine();
+  instance = startSketch();
+}
+
+const onPageHide = (): void => teardownAll();
+const onPageShow = (event: PageTransitionEvent): void => {
+  if (event.persisted && disposed) initAll();
+};
+window.addEventListener("pagehide", onPageHide);
+window.addEventListener("pageshow", onPageShow);
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    for (const dispose of disposers) dispose();
-    disposers.length = 0;
-    instance?.remove();
-    instance = null;
-    // context と常駐リスナーも解除する（正本 §5。HMR 再初期化時に重複を残さない）
-    audio.dispose();
+    // 旧モジュールの離脱フックを外してから冪等に終了する（HMR 再初期化時に重複を残さない）
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
+    teardownAll();
   });
 }
